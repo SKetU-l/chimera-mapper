@@ -1,0 +1,28 @@
+# Build artifacts
+target/
+debug/
+release/
+
+# Rust/Cargo
+**/*.rs.bk
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.*
+!.env.example
