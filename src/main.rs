@@ -1,8 +1,11 @@
 use clap::{Args, Parser, Subcommand};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::Write as _;
+use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 type AppResult<T> = Result<T, Box<dyn Error>>;
@@ -51,7 +54,7 @@ struct RunArgs {
     name: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct MappingConfig {
     button_byte: usize,
     side_mask: u8,
@@ -74,6 +77,23 @@ enum ActionKind {
 struct Transition {
     kind: ActionKind,
     pressed: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SavedProfile {
+    path: String,
+    vid: u16,
+    pid: u16,
+    serial: Option<String>,
+    usage_page: u16,
+    usage: u16,
+    interface_number: i32,
+    mapping: MappingConfig,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct AppConfig {
+    profile: Option<SavedProfile>,
 }
 
 #[derive(Clone)]
@@ -136,6 +156,37 @@ fn parse_u16(input: &str) -> Result<u16, String> {
 fn parse_u8(input: &str) -> Result<u8, String> {
     let value = parse_prefixed_u32(input)?;
     u8::try_from(value).map_err(|_| format!("value {input:?} does not fit into u8"))
+}
+
+fn config_path() -> AppResult<PathBuf> {
+    let mut base =
+        dirs::config_dir().ok_or("unable to locate config directory for current user")?;
+    base.push("chimera-mapper");
+    Ok(base.join("config.json"))
+}
+
+fn ensure_parent_dir(path: &Path) -> AppResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn load_config() -> AppResult<AppConfig> {
+    let path = config_path()?;
+    if !path.exists() {
+        return Ok(AppConfig::default());
+    }
+
+    let raw = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+fn save_config(config: &AppConfig) -> AppResult<()> {
+    let path = config_path()?;
+    ensure_parent_dir(&path)?;
+    fs::write(path, serde_json::to_string_pretty(config)?)?;
+    Ok(())
 }
 
 fn format_report(report: &[u8]) -> String {
@@ -277,6 +328,42 @@ fn build_autodetect_candidates(api: &HidApi, report_len: usize) -> Vec<Autodetec
     candidates
 }
 
+fn mapping_from_args(args: &RunArgs) -> MappingConfig {
+    MappingConfig {
+        button_byte: args.button_byte,
+        side_mask: args.side_mask,
+        extra_mask: args.extra_mask,
+    }
+}
+
+fn saved_profile_from_args(args: &RunArgs) -> Option<SavedProfile> {
+    Some(SavedProfile {
+        path: args.path.clone()?,
+        vid: args.vid?,
+        pid: args.pid?,
+        serial: args.serial.clone(),
+        usage_page: args.usage_page?,
+        usage: args.usage?,
+        interface_number: args.interface_number?,
+        mapping: mapping_from_args(args),
+    })
+}
+
+fn apply_saved_profile(args: &RunArgs, profile: &SavedProfile) -> RunArgs {
+    let mut resolved = args.clone();
+    resolved.path = Some(profile.path.clone());
+    resolved.vid = Some(profile.vid);
+    resolved.pid = Some(profile.pid);
+    resolved.serial = profile.serial.clone();
+    resolved.usage_page = Some(profile.usage_page);
+    resolved.usage = Some(profile.usage);
+    resolved.interface_number = Some(profile.interface_number);
+    resolved.button_byte = profile.mapping.button_byte;
+    resolved.side_mask = profile.mapping.side_mask;
+    resolved.extra_mask = profile.mapping.extra_mask;
+    resolved
+}
+
 fn apply_detected_device(args: &RunArgs, device: &DeviceInfo) -> RunArgs {
     let mut resolved = args.clone();
     resolved.path = Some(device.path().to_string_lossy().into_owned());
@@ -364,6 +451,29 @@ fn autodetect_args(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
         device.interface_number(),
     );
 
+    Ok(resolved)
+}
+
+fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
+    if has_explicit_device_selector(&args) {
+        return Ok(args);
+    }
+
+    if let Ok(config) = load_config() {
+        if let Some(profile) = config.profile {
+            let saved_args = apply_saved_profile(&args, &profile);
+            if open_device(api, &saved_args).is_ok() {
+                return Ok(saved_args);
+            }
+        }
+    }
+
+    let resolved = autodetect_args(api, &args)?;
+    if let Some(profile) = saved_profile_from_args(&resolved) {
+        let _ = save_config(&AppConfig {
+            profile: Some(profile),
+        });
+    }
     Ok(resolved)
 }
 
@@ -460,11 +570,7 @@ fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
 fn run_dump(args: RunArgs) -> AppResult<()> {
     let api = HidApi::new()?;
     let device = open_device(&api, &args)?;
-    let cfg = MappingConfig {
-        button_byte: args.button_byte,
-        side_mask: args.side_mask,
-        extra_mask: args.extra_mask,
-    };
+    let cfg = mapping_from_args(&args);
     let mut buf = vec![0u8; args.report_len];
 
     loop {
@@ -488,17 +594,9 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
 
 fn run_mapper(args: RunArgs) -> AppResult<()> {
     let api = HidApi::new()?;
-    let args = if has_explicit_device_selector(&args) {
-        args
-    } else {
-        autodetect_args(&api, &args)?
-    };
+    let args = resolve_run_args(&api, args)?;
     let device = open_device(&api, &args)?;
-    let cfg = MappingConfig {
-        button_byte: args.button_byte,
-        side_mask: args.side_mask,
-        extra_mask: args.extra_mask,
-    };
+    let cfg = mapping_from_args(&args);
     let mut state = MapperState::default();
     let mut emitter = backend::Emitter::new(&args.name)?;
     let mut buf = vec![0u8; args.report_len];
