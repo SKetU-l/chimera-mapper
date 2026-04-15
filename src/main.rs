@@ -1,8 +1,9 @@
 use clap::{Args, Parser, Subcommand};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
 use std::error::Error;
-use std::ffi::CString;
 use std::fmt::Write as _;
+use std::io::{self, Write};
+use std::time::{Duration, Instant};
 
 type AppResult<T> = Result<T, Box<dyn Error>>;
 
@@ -75,6 +76,13 @@ struct Transition {
     pressed: bool,
 }
 
+#[derive(Clone)]
+struct AutodetectCandidate {
+    score: i32,
+    device: DeviceInfo,
+    last_report: Vec<u8>,
+}
+
 impl MapperState {
     fn update(&mut self, cfg: MappingConfig, report: &[u8]) -> Vec<Transition> {
         if report.len() <= cfg.button_byte {
@@ -145,21 +153,218 @@ fn list_devices() -> AppResult<()> {
     let api = HidApi::new()?;
 
     for device in api.device_list() {
-        println!(
-            "path={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={} product={} manufacturer={} serial={}",
-            device.path().to_string_lossy(),
-            device.vendor_id(),
-            device.product_id(),
-            device.usage_page(),
-            device.usage(),
-            device.interface_number(),
-            device.product_string().unwrap_or("-"),
-            device.manufacturer_string().unwrap_or("-"),
-            device.serial_number().unwrap_or("-"),
-        );
+        println!("{}", format_device(device));
     }
 
     Ok(())
+}
+
+fn format_device(device: &DeviceInfo) -> String {
+    format!(
+        "path={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={} product={} manufacturer={} serial={}",
+        device.path().to_string_lossy(),
+        device.vendor_id(),
+        device.product_id(),
+        device.usage_page(),
+        device.usage(),
+        device.interface_number(),
+        device.product_string().unwrap_or("-"),
+        device.manufacturer_string().unwrap_or("-"),
+        device.serial_number().unwrap_or("-"),
+    )
+}
+
+fn has_explicit_device_selector(args: &RunArgs) -> bool {
+    args.path.is_some()
+        || args.vid.is_some()
+        || args.pid.is_some()
+        || args.serial.is_some()
+        || args.usage_page.is_some()
+        || args.usage.is_some()
+        || args.interface_number.is_some()
+}
+
+fn candidate_haystack(device: &DeviceInfo) -> String {
+    let mut haystack = String::new();
+    haystack.push_str(device.path().to_string_lossy().as_ref());
+    haystack.push(' ');
+    if let Some(value) = device.product_string() {
+        haystack.push_str(value);
+        haystack.push(' ');
+    }
+    if let Some(value) = device.manufacturer_string() {
+        haystack.push_str(value);
+        haystack.push(' ');
+    }
+    if let Some(value) = device.serial_number() {
+        haystack.push_str(value);
+    }
+    haystack.to_ascii_lowercase()
+}
+
+fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
+    let haystack = candidate_haystack(device);
+    let mut score = 0;
+
+    if haystack.contains("chimera") {
+        score += 10_000;
+    }
+    if haystack.contains("mouse") {
+        score += 500;
+    }
+    if device.usage_page() == 0x0001 {
+        score += 200;
+    }
+    if device.usage() == 0x0002 {
+        score += 200;
+    }
+    if device.interface_number() == 0 {
+        score += 100;
+    }
+    if device.path().to_string_lossy().contains("event") {
+        score += 25;
+    }
+
+    if score == 0 { None } else { Some(score) }
+}
+
+fn read_report_snapshot(
+    device: &HidDevice,
+    report_len: usize,
+    timeout_ms: i32,
+) -> AppResult<Vec<u8>> {
+    let mut buf = vec![0u8; report_len];
+    let size = device.read_timeout(&mut buf, timeout_ms)?;
+    if size < report_len {
+        buf[size..].fill(0);
+    }
+    Ok(buf)
+}
+
+fn first_pressed_bit(previous: &[u8], current: &[u8]) -> Option<(usize, u8)> {
+    for (index, (&before, &after)) in previous.iter().zip(current.iter()).enumerate() {
+        let pressed = (!before) & after;
+        if pressed != 0 {
+            return Some((index, pressed & pressed.wrapping_neg()));
+        }
+    }
+
+    None
+}
+
+fn build_autodetect_candidates(api: &HidApi, report_len: usize) -> Vec<AutodetectCandidate> {
+    let mut candidates = Vec::new();
+
+    for device in api.device_list() {
+        let Some(score) = autodetect_score(device) else {
+            continue;
+        };
+
+        let last_report = match device.open_device(api) {
+            Ok(handle) => read_report_snapshot(&handle, report_len, 20)
+                .unwrap_or_else(|_| vec![0; report_len]),
+            Err(_) => vec![0; report_len],
+        };
+
+        candidates.push(AutodetectCandidate {
+            score,
+            device: device.clone(),
+            last_report,
+        });
+    }
+
+    candidates.sort_by(|left, right| right.score.cmp(&left.score));
+    candidates
+}
+
+fn apply_detected_device(args: &RunArgs, device: &DeviceInfo) -> RunArgs {
+    let mut resolved = args.clone();
+    resolved.path = Some(device.path().to_string_lossy().into_owned());
+    resolved.vid = Some(device.vendor_id());
+    resolved.pid = Some(device.product_id());
+    resolved.serial = device.serial_number().map(ToOwned::to_owned);
+    resolved.usage_page = Some(device.usage_page());
+    resolved.usage = Some(device.usage());
+    resolved.interface_number = Some(device.interface_number());
+    resolved
+}
+
+fn find_device_by_path(api: &HidApi, path: &str) -> Option<DeviceInfo> {
+    api.device_list()
+        .find(|device| device.path().to_string_lossy() == path)
+        .cloned()
+}
+
+fn resolve_by_behavior(
+    api: &HidApi,
+    candidates: &mut [AutodetectCandidate],
+    report_len: usize,
+) -> AppResult<Option<DeviceInfo>> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    eprintln!("multiple plausible HID interfaces found");
+    eprintln!("press either side button repeatedly to confirm the correct device");
+    io::stderr().flush()?;
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        for candidate in candidates.iter_mut() {
+            let Ok(handle) = candidate.device.open_device(api) else {
+                continue;
+            };
+            let Ok(current) = read_report_snapshot(&handle, report_len, 20) else {
+                continue;
+            };
+
+            if first_pressed_bit(&candidate.last_report, &current).is_some() {
+                return Ok(Some(candidate.device.clone()));
+            }
+
+            candidate.last_report = current;
+        }
+    }
+
+    Ok(None)
+}
+
+fn autodetect_args(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
+    let mut candidates = build_autodetect_candidates(api, args.report_len);
+    if candidates.is_empty() {
+        return Err(
+            "no likely Chimera HID device found; run `list` and pass selectors manually".into(),
+        );
+    }
+
+    let best_score = candidates[0].score;
+    let plausible_len = candidates
+        .iter()
+        .take_while(|candidate| candidate.score + 200 >= best_score)
+        .count();
+
+    let device = if plausible_len <= 1 {
+        candidates[0].device.clone()
+    } else {
+        match resolve_by_behavior(api, &mut candidates[..plausible_len], args.report_len)? {
+            Some(device) => device,
+            None => candidates[0].device.clone(),
+        }
+    };
+
+    let resolved = apply_detected_device(args, &device);
+
+    eprintln!(
+        "auto-selected device: product={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={}",
+        device.product_string().unwrap_or("-"),
+        device.vendor_id(),
+        device.product_id(),
+        device.usage_page(),
+        device.usage(),
+        device.interface_number(),
+    );
+
+    Ok(resolved)
 }
 
 fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
@@ -210,12 +415,15 @@ fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
 
 fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
     if let Some(path) = &args.path {
-        let c_path = CString::new(path.as_str())?;
-        return Ok(api.open_path(&c_path)?);
+        let device = find_device_by_path(api, path)
+            .ok_or("no HID device matched the supplied --path selector")?;
+        return Ok(device.open_device(api)?);
     }
 
     if args.vid.is_none() || args.pid.is_none() {
-        return Err("select a device with --path or with both --vid and --pid; use `list` first".into());
+        return Err(
+            "select a device with --path or with both --vid and --pid; use `list` first".into(),
+        );
     }
 
     let matches: Vec<_> = api
@@ -228,7 +436,9 @@ fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
         [] => Err("no HID device matched the supplied filters".into()),
         [device] => Ok(device.open_device(api)?),
         many => {
-            eprintln!("multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path");
+            eprintln!(
+                "multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path"
+            );
             for device in many {
                 eprintln!(
                     "  path={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={} product={} serial={}",
@@ -255,7 +465,6 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
         side_mask: args.side_mask,
         extra_mask: args.extra_mask,
     };
-    let mut state = MapperState::default();
     let mut buf = vec![0u8; args.report_len];
 
     loop {
@@ -265,7 +474,6 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
         }
 
         let report = &buf[..size];
-        let transitions = state.update(cfg, report);
         let byte = report.get(cfg.button_byte).copied().unwrap_or_default();
         println!(
             "report=[{}] byte[{}]=0x{:02x} forward={} back={}",
@@ -275,22 +483,16 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
             (byte & cfg.side_mask) != 0,
             (byte & cfg.extra_mask) != 0
         );
-
-        for transition in transitions {
-            println!(
-                "  {} {}",
-                match transition.kind {
-                    ActionKind::Forward => "forward",
-                    ActionKind::Back => "back",
-                },
-                if transition.pressed { "pressed" } else { "released" }
-            );
-        }
     }
 }
 
 fn run_mapper(args: RunArgs) -> AppResult<()> {
     let api = HidApi::new()?;
+    let args = if has_explicit_device_selector(&args) {
+        args
+    } else {
+        autodetect_args(&api, &args)?
+    };
     let device = open_device(&api, &args)?;
     let cfg = MappingConfig {
         button_byte: args.button_byte,
