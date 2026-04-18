@@ -43,10 +43,10 @@ In short: read HID reports → detect side-button transitions → emit mapped ac
 ## Current priorities (before base release)
 
 - [ ] Verify Linux behavior works properly end-to-end
-- [ ] Validate disconnect behavior while running
-- [ ] Validate reconnect behavior after interruptions
-- [ ] Validate wired ↔ wireless switching behavior
-- [ ] Ensure no stuck button state after reconnect/switch
+- [x] Validate disconnect behavior while running
+- [x] Validate reconnect behavior after interruptions
+- [x] Validate wired ↔ wireless switching behavior
+- [x] Ensure no stuck button state after reconnect/switch
 - [ ] Fix issues found during these stability checks
 
 ## Non-goals for now
@@ -57,7 +57,8 @@ In short: read HID reports → detect side-button transitions → emit mapped ac
 
 ## Roadmap (after stable base version)
 
-- Broader device testing
+- Custom key mapping (allow users to set custom shortcuts or options instead of just Forward/Back)
+- Graphical User Interface (GUI)
 - Better diagnostics and troubleshooting logs
 - Cleaner end-user setup/usage documentation
 

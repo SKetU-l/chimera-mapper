@@ -221,6 +221,7 @@ fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
     if device.usage() == 0x0002 { score += 200; }
     if device.interface_number() == 0 { score += 100; }
     if device.path().to_string_lossy().contains("event") { score += 25; }
+    if device.product_id() == 0x5b49 { score += 50; }
     if score == 0 { None } else { Some(score) }
 }
 
@@ -330,10 +331,16 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
     if has_explicit_device_selector(&args) {
         return Ok(args);
     }
+
+    let has_wired = api.device_list().any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
+
     if let Ok(config) = load_config() {
         if let Some(profile) = config.profile {
             let saved_args = apply_saved_profile(&args, &profile);
-            if open_device(api, &saved_args).is_ok() {
+            
+            let is_saved_wireless = profile.vid == 0x248a && profile.pid == 0x5b4a;
+            if has_wired && is_saved_wireless {
+            } else if open_device(api, &saved_args).is_ok() {
                 return Ok(saved_args);
             }
         }

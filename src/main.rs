@@ -87,9 +87,26 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
         let mut buf = vec![0u8; resolved.report_len];
         eprintln!("device connected, listening for events");
 
+        let mut last_refresh = std::time::Instant::now();
+        let is_wireless = resolved.vid == Some(0x248a) && resolved.pid == Some(0x5b4a);
+        let mut api = api;
+
         loop {
             match device.read_timeout(&mut buf, resolved.timeout_ms) {
-                Ok(0) => continue,
+                Ok(0) => {
+                    if is_wireless && last_refresh.elapsed() > Duration::from_secs(2) {
+                        last_refresh = std::time::Instant::now();
+                        let _ = api.refresh_devices();
+                        if api.device_list().any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49) {
+                            eprintln!("wired device detected; switching over");
+                            for transition in state.synthesize_releases() {
+                                let _ = emitter.emit(transition);
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 Ok(size) => {
                     for transition in state.update(cfg, &buf[..size]) {
                         emitter.emit(transition)?;
