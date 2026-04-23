@@ -28,16 +28,9 @@ pub struct AppConfig {
     pub profile: Option<SavedProfile>,
 }
 
-pub struct PidGuard(pub PathBuf);
-
-impl Drop for PidGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 pub fn config_path() -> AppResult<PathBuf> {
-    let mut base = dirs::config_dir().ok_or("unable to locate config directory for current user")?;
+    let mut base =
+        dirs::config_dir().ok_or("unable to locate config directory for current user")?;
     base.push("chimera-mapper");
     Ok(base.join("config.json"))
 }
@@ -47,25 +40,6 @@ pub fn ensure_parent_dir(path: &Path) -> AppResult<()> {
         fs::create_dir_all(parent)?;
     }
     Ok(())
-}
-
-pub fn pid_path() -> AppResult<PathBuf> {
-    let mut base = dirs::config_dir().ok_or("unable to locate config directory for current user")?;
-    base.push("chimera-mapper");
-    Ok(base.join("pid"))
-}
-
-pub fn write_pid() -> AppResult<PidGuard> {
-    let path = pid_path()?;
-    ensure_parent_dir(&path)?;
-    fs::write(&path, std::process::id().to_string())?;
-    Ok(PidGuard(path))
-}
-
-pub fn read_pid() -> AppResult<u32> {
-    let path = pid_path()?;
-    let raw = fs::read_to_string(path)?;
-    raw.trim().parse().map_err(|e| format!("invalid pid file: {e}").into())
 }
 
 pub fn load_config() -> AppResult<AppConfig> {

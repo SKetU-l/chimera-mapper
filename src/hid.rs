@@ -4,9 +4,7 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use crate::config::{
-    AppConfig, AppResult, MappingConfig, SavedProfile, load_config, save_config,
-};
+use crate::config::{AppResult, MappingConfig, SavedProfile, load_config};
 
 #[derive(Args, Clone)]
 pub struct RunArgs {
@@ -38,15 +36,6 @@ pub struct RunArgs {
     pub name: String,
 }
 
-pub fn default_run_args() -> RunArgs {
-    RunArgs {
-        path: None, vid: None, pid: None, serial: None,
-        usage_page: None, usage: None, interface_number: None,
-        report_len: 64, button_byte: 1, side_mask: 0x10, extra_mask: 0x08,
-        timeout_ms: 250, name: "chimera-mapper".into(),
-    }
-}
-
 #[derive(Default)]
 pub struct MapperState {
     pub prev_forward: bool,
@@ -75,11 +64,17 @@ impl MapperState {
         let back = (byte & cfg.extra_mask) != 0;
         let mut out = Vec::with_capacity(2);
         if forward != self.prev_forward {
-            out.push(Transition { kind: ActionKind::Forward, pressed: forward });
+            out.push(Transition {
+                kind: ActionKind::Forward,
+                pressed: forward,
+            });
             self.prev_forward = forward;
         }
         if back != self.prev_back {
-            out.push(Transition { kind: ActionKind::Back, pressed: back });
+            out.push(Transition {
+                kind: ActionKind::Back,
+                pressed: back,
+            });
             self.prev_back = back;
         }
         out
@@ -88,11 +83,17 @@ impl MapperState {
     pub fn synthesize_releases(&mut self) -> Vec<Transition> {
         let mut out = Vec::new();
         if self.prev_forward {
-            out.push(Transition { kind: ActionKind::Forward, pressed: false });
+            out.push(Transition {
+                kind: ActionKind::Forward,
+                pressed: false,
+            });
             self.prev_forward = false;
         }
         if self.prev_back {
-            out.push(Transition { kind: ActionKind::Back, pressed: false });
+            out.push(Transition {
+                kind: ActionKind::Back,
+                pressed: false,
+            });
             self.prev_back = false;
         }
         out
@@ -108,10 +109,15 @@ pub struct AutodetectCandidate {
 
 fn parse_prefixed_u32(input: &str) -> Result<u32, String> {
     let trimmed = input.trim();
-    if let Some(rest) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
         u32::from_str_radix(rest, 16).map_err(|e| format!("invalid hex value {trimmed:?}: {e}"))
     } else {
-        trimmed.parse::<u32>().map_err(|e| format!("invalid integer value {trimmed:?}: {e}"))
+        trimmed
+            .parse::<u32>()
+            .map_err(|e| format!("invalid integer value {trimmed:?}: {e}"))
     }
 }
 
@@ -128,7 +134,9 @@ pub fn parse_u8(input: &str) -> Result<u8, String> {
 pub fn format_report(report: &[u8]) -> String {
     let mut out = String::new();
     for (idx, byte) in report.iter().enumerate() {
-        if idx > 0 { out.push(' '); }
+        if idx > 0 {
+            out.push(' ');
+        }
         let _ = write!(out, "{byte:02x}");
     }
     out
@@ -206,34 +214,65 @@ pub fn apply_saved_profile(args: &RunArgs, profile: &SavedProfile) -> RunArgs {
 fn candidate_haystack(device: &DeviceInfo) -> String {
     let mut s = device.path().to_string_lossy().into_owned();
     s.push(' ');
-    if let Some(v) = device.product_string() { s.push_str(v); s.push(' '); }
-    if let Some(v) = device.manufacturer_string() { s.push_str(v); s.push(' '); }
-    if let Some(v) = device.serial_number() { s.push_str(v); }
+    if let Some(v) = device.product_string() {
+        s.push_str(v);
+        s.push(' ');
+    }
+    if let Some(v) = device.manufacturer_string() {
+        s.push_str(v);
+        s.push(' ');
+    }
+    if let Some(v) = device.serial_number() {
+        s.push_str(v);
+    }
     s.to_ascii_lowercase()
 }
 
 fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
     let h = candidate_haystack(device);
     let mut score = 0;
-    if h.contains("chimera") { score += 10_000; }
-    if h.contains("mouse") { score += 500; }
-    if device.usage_page() == 0x0001 { score += 200; }
-    if device.usage() == 0x0002 { score += 200; }
-    if device.interface_number() == 0 { score += 100; }
-    if device.path().to_string_lossy().contains("event") { score += 25; }
-    if device.product_id() == 0x5b49 { score += 50; }
+    if h.contains("chimera") {
+        score += 10_000;
+    }
+    if h.contains("mouse") {
+        score += 500;
+    }
+    if device.usage_page() == 0x0001 {
+        score += 200;
+    }
+    if device.usage() == 0x0002 {
+        score += 200;
+    }
+    if device.interface_number() == 0 {
+        score += 100;
+    }
+    if device.path().to_string_lossy().contains("event") {
+        score += 25;
+    }
+    if device.product_id() == 0x5b49 {
+        score += 50;
+    }
     if score == 0 { None } else { Some(score) }
 }
 
-fn read_report_snapshot(device: &HidDevice, report_len: usize, timeout_ms: i32) -> AppResult<Vec<u8>> {
+fn read_report_snapshot(
+    device: &HidDevice,
+    report_len: usize,
+    timeout_ms: i32,
+) -> AppResult<Vec<u8>> {
     let mut buf = vec![0u8; report_len];
     let size = device.read_timeout(&mut buf, timeout_ms)?;
-    if size < report_len { buf[size..].fill(0); }
+    if size < report_len {
+        buf[size..].fill(0);
+    }
     Ok(buf)
 }
 
 fn any_bit_newly_pressed(previous: &[u8], current: &[u8]) -> bool {
-    previous.iter().zip(current.iter()).any(|(&b, &a)| (!b) & a != 0)
+    previous
+        .iter()
+        .zip(current.iter())
+        .any(|(&b, &a)| (!b) & a != 0)
 }
 
 fn build_autodetect_candidates(api: &HidApi, report_len: usize) -> Vec<AutodetectCandidate> {
@@ -246,7 +285,11 @@ fn build_autodetect_candidates(api: &HidApi, report_len: usize) -> Vec<Autodetec
                 .ok()
                 .and_then(|h| read_report_snapshot(&h, report_len, 20).ok())
                 .unwrap_or_else(|| vec![0; report_len]);
-            Some(AutodetectCandidate { score, device: device.clone(), last_report })
+            Some(AutodetectCandidate {
+                score,
+                device: device.clone(),
+                last_report,
+            })
         })
         .collect();
     candidates.sort_by(|a, b| b.score.cmp(&a.score));
@@ -268,8 +311,12 @@ fn resolve_by_behavior(
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
         for candidate in candidates.iter_mut() {
-            let Ok(handle) = candidate.device.open_device(api) else { continue };
-            let Ok(current) = read_report_snapshot(&handle, report_len, 20) else { continue };
+            let Ok(handle) = candidate.device.open_device(api) else {
+                continue;
+            };
+            let Ok(current) = read_report_snapshot(&handle, report_len, 20) else {
+                continue;
+            };
             if any_bit_newly_pressed(&candidate.last_report, &current) {
                 return Ok(Some(candidate.device.clone()));
             }
@@ -283,18 +330,23 @@ fn resolve_by_behavior(
 pub fn autodetect_args(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
     let mut candidates = build_autodetect_candidates(api, args.report_len);
     if candidates.is_empty() {
-        return Err("no likely Chimera HID device found; run `list` and pass selectors manually".into());
+        return Err(
+            "no likely Chimera HID device found; run `list` and pass selectors manually".into(),
+        );
     }
 
     let best_score = candidates[0].score;
-    let plausible_len = candidates.iter().take_while(|c| c.score + 200 >= best_score).count();
+    let plausible_len = candidates
+        .iter()
+        .take_while(|c| c.score + 200 >= best_score)
+        .count();
 
     let device = if plausible_len <= 1 {
         candidates[0].device.clone()
     } else {
         match resolve_by_behavior(api, &mut candidates[..plausible_len], args.report_len)? {
             Some(d) => d,
-            None => candidates[0].device.clone(),
+            _ => candidates[0].device.clone(),
         }
     };
 
@@ -310,20 +362,13 @@ pub fn autodetect_args(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
     eprintln!(
         "auto-selected device: product={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={}",
         device.product_string().unwrap_or("-"),
-        device.vendor_id(), device.product_id(),
-        device.usage_page(), device.usage(), device.interface_number(),
+        device.vendor_id(),
+        device.product_id(),
+        device.usage_page(),
+        device.usage(),
+        device.interface_number(),
     );
 
-    Ok(resolved)
-}
-
-pub fn detect_and_save(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
-    let resolved = autodetect_args(api, args)?;
-    if let Some(profile) = saved_profile_from_args(&resolved) {
-        if let Err(e) = save_config(&AppConfig { profile: Some(profile) }) {
-            eprintln!("warning: failed to save device profile: {e}");
-        }
-    }
     Ok(resolved)
 }
 
@@ -332,12 +377,14 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
         return Ok(args);
     }
 
-    let has_wired = api.device_list().any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
+    let has_wired = api
+        .device_list()
+        .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
 
     if let Ok(config) = load_config() {
         if let Some(profile) = config.profile {
             let saved_args = apply_saved_profile(&args, &profile);
-            
+
             let is_saved_wireless = profile.vid == 0x248a && profile.pid == 0x5b4a;
             if has_wired && is_saved_wireless {
             } else if open_device(api, &saved_args).is_ok() {
@@ -345,30 +392,47 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
             }
         }
     }
-    detect_and_save(api, &args)
+    // Fallback to autodetection (previously this called detect_and_save, which both
+    // auto-detected and persisted a profile). The persistence behavior is handled
+    // elsewhere (e.g. when a profile is explicitly chosen).
+    autodetect_args(api, &args)
 }
 
 fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
     if let Some(path) = &args.path {
-        if device.path().to_string_lossy() != path.as_str() { return false; }
+        if device.path().to_string_lossy() != path.as_str() {
+            return false;
+        }
     }
     if let Some(vid) = args.vid {
-        if device.vendor_id() != vid { return false; }
+        if device.vendor_id() != vid {
+            return false;
+        }
     }
     if let Some(pid) = args.pid {
-        if device.product_id() != pid { return false; }
+        if device.product_id() != pid {
+            return false;
+        }
     }
     if let Some(serial) = &args.serial {
-        if device.serial_number() != Some(serial.as_str()) { return false; }
+        if device.serial_number() != Some(serial.as_str()) {
+            return false;
+        }
     }
     if let Some(usage_page) = args.usage_page {
-        if device.usage_page() != usage_page { return false; }
+        if device.usage_page() != usage_page {
+            return false;
+        }
     }
     if let Some(usage) = args.usage {
-        if device.usage() != usage { return false; }
+        if device.usage() != usage {
+            return false;
+        }
     }
     if let Some(interface_number) = args.interface_number {
-        if device.interface_number() != interface_number { return false; }
+        if device.interface_number() != interface_number {
+            return false;
+        }
     }
     true
 }
@@ -376,27 +440,41 @@ fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
 pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
     // Try path first, but if stale fall through to VID+PID matching
     if let Some(path) = &args.path {
-        if let Some(device) = api.device_list().find(|d| d.path().to_string_lossy() == path.as_str()) {
+        if let Some(device) = api
+            .device_list()
+            .find(|d| d.path().to_string_lossy() == path.as_str())
+        {
             return Ok(device.open_device(api)?);
         }
     }
 
     if args.vid.is_none() || args.pid.is_none() {
-        return Err("select a device with --path or with both --vid and --pid; use `list` first".into());
+        return Err(
+            "select a device with --path or with both --vid and --pid; use `list` first".into(),
+        );
     }
 
-    let matches: Vec<_> = api.device_list().filter(|d| matches_filters(d, args)).cloned().collect();
+    let matches: Vec<_> = api
+        .device_list()
+        .filter(|d| matches_filters(d, args))
+        .cloned()
+        .collect();
     match matches.as_slice() {
         [] => Err("no HID device matched the supplied filters".into()),
         [device] => Ok(device.open_device(api)?),
         many => {
-            eprintln!("multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path");
+            eprintln!(
+                "multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path"
+            );
             for device in many {
                 eprintln!(
                     "  path={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={} product={} serial={}",
                     device.path().to_string_lossy(),
-                    device.vendor_id(), device.product_id(),
-                    device.usage_page(), device.usage(), device.interface_number(),
+                    device.vendor_id(),
+                    device.product_id(),
+                    device.usage_page(),
+                    device.usage(),
+                    device.interface_number(),
                     device.product_string().unwrap_or("-"),
                     device.serial_number().unwrap_or("-"),
                 );

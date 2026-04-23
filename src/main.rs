@@ -5,14 +5,12 @@ use std::time::Duration;
 mod backend;
 mod config;
 mod hid;
-mod platform;
 
-use config::{AppConfig, AppResult, save_config, write_pid};
+use config::{AppConfig, AppResult, save_config};
 use hid::{
-    MapperState, RunArgs, default_run_args, detect_and_save, format_report, list_devices,
-    mapping_from_args, open_device, resolve_run_args, saved_profile_from_args,
+    MapperState, RunArgs, format_report, list_devices, mapping_from_args, open_device,
+    resolve_run_args, saved_profile_from_args,
 };
-use platform::{restart_daemon, run_install, run_uninstall, stop_existing};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -26,9 +24,6 @@ enum Command {
     List,
     Dump(RunArgs),
     Run(RunArgs),
-    Reload,
-    Install,
-    Uninstall,
 }
 
 fn run_dump(args: RunArgs) -> AppResult<()> {
@@ -40,13 +35,16 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
 
     loop {
         let size = device.read_timeout(&mut buf, args.timeout_ms)?;
-        if size == 0 { continue; }
+        if size == 0 {
+            continue;
+        }
         let report = &buf[..size];
         let byte = report.get(cfg.button_byte).copied().unwrap_or_default();
         println!(
             "report=[{}] byte[{}]=0x{:02x} forward={} back={}",
             format_report(report),
-            cfg.button_byte, byte,
+            cfg.button_byte,
+            byte,
             (byte & cfg.side_mask) != 0,
             (byte & cfg.extra_mask) != 0,
         );
@@ -54,7 +52,6 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
 }
 
 fn run_mapper(args: RunArgs) -> AppResult<()> {
-    let _pid_guard = write_pid()?;
     let mut state = MapperState::default();
     let mut emitter = backend::Emitter::new(&args.name)?;
 
@@ -80,7 +77,9 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
         };
 
         if let Some(profile) = saved_profile_from_args(&resolved) {
-            let _ = save_config(&AppConfig { profile: Some(profile) });
+            let _ = save_config(&AppConfig {
+                profile: Some(profile),
+            });
         }
 
         let cfg = mapping_from_args(&resolved);
@@ -97,7 +96,10 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                     if is_wireless && last_refresh.elapsed() > Duration::from_secs(2) {
                         last_refresh = std::time::Instant::now();
                         let _ = api.refresh_devices();
-                        if api.device_list().any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49) {
+                        if api
+                            .device_list()
+                            .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49)
+                        {
                             eprintln!("wired device detected; switching over");
                             for transition in state.synthesize_releases() {
                                 let _ = emitter.emit(transition);
@@ -125,23 +127,11 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
     }
 }
 
-fn run_reload() -> AppResult<()> {
-    eprintln!("re-detecting device — press a side button to confirm...");
-    let api = HidApi::new()?;
-    detect_and_save(&api, &default_run_args())?;
-    eprintln!("device profile updated in json");
-    stop_existing();
-    restart_daemon()
-}
-
 fn main() {
     let result = match Cli::parse().command {
         Command::List => list_devices(),
         Command::Dump(args) => run_dump(args),
         Command::Run(args) => run_mapper(args),
-        Command::Reload => run_reload(),
-        Command::Install => run_install(),
-        Command::Uninstall => run_uninstall(),
     };
 
     if let Err(err) = result {

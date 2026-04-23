@@ -1,5 +1,5 @@
-use crate::hid::{ActionKind, Transition};
 use crate::config::AppResult;
+use crate::hid::{ActionKind, Transition};
 use evdev::event_variants::KeyEvent;
 use evdev::uinput::VirtualDevice;
 use evdev::{AttributeSet, KeyCode};
@@ -25,17 +25,17 @@ impl Emitter {
 
     pub fn emit(&mut self, transition: Transition) -> AppResult<()> {
         let value = i32::from(transition.pressed);
-        let events = match transition.kind {
-            ActionKind::Forward => [
+        let events: Vec<_> = match transition.kind {
+            ActionKind::Forward => vec![
                 KeyEvent::new(KeyCode::BTN_EXTRA, value).into(),
                 KeyEvent::new(KeyCode::KEY_FORWARD, value).into(),
             ],
-            ActionKind::Back => [
+            ActionKind::Back => vec![
                 KeyEvent::new(KeyCode::BTN_SIDE, value).into(),
                 KeyEvent::new(KeyCode::KEY_BACK, value).into(),
             ],
         };
-        self.device.emit(&events)?;
+        self.device.emit(&events[..])?;
         Ok(())
     }
 }
