@@ -57,7 +57,6 @@ jobs:
           path: ./release
 
       - name: Create Release
-        uses: ncipollo/release-action@v3
+        uses: softprops/action-gh-release@v3.0.0
         with:
-          artifacts: release/*
-          artifactContentType: application/octet-stream
+          files: release/*
