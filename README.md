@@ -1,5 +1,4 @@
 rust/README.md
-```md
 # chimera-mapper
 
 HID side-button mapper for **Kreo Chimera V1** mouse.
