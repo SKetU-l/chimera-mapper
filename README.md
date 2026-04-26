@@ -19,7 +19,7 @@ The installer will:
 ## Uninstall
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts/uninstall.sh)
+curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts/uninstall.sh | bash
 ```
 
 This removes the app and auto-start configuration.

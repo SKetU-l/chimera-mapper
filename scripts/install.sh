@@ -7,8 +7,13 @@ REPO_OWNER="SKetU-l"
 REPO_NAME="chimera-mapper"
 BIN_NAME="chimera-mapper"
 SERVICE_LABEL="xyz.sketu.chimera-mapper"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+fi
 
 status() { echo -e "${GREEN}✓${RESET} $1"; }
 step()  { echo -e "\n${BOLD}$1${RESET}"; }
