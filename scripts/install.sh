@@ -12,7 +12,7 @@ if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 else
-  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 fi
 
 status() { echo -e "${GREEN}✓${RESET} $1"; }
