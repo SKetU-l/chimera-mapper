@@ -42,7 +42,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: binaries
+          name: ${{ matrix.bin_name }}
           path: release/${{ matrix.bin_name }}
 
   release:
@@ -54,8 +54,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
-          name: binaries
+          pattern: chimera-mapper-*
           path: ./release
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v3.0.0
