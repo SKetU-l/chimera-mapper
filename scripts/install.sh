@@ -33,12 +33,21 @@ ensure_git() {
 }
 
 ensure_rust() {
-  if ! command -v cargo &>/dev/null; then
-    step "Installing rustup"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-    status "rustup installed"
+  if command -v cargo &>/dev/null; then
+    status "Found system-wide cargo"
+    return
   fi
-  source "${CARGO_HOME:-$HOME/.cargo}/env"
+
+  step "Installing rustup"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+  status "rustup installed"
+
+  local env_path="${CARGO_HOME:-$HOME/.cargo}/env"
+  if [[ -f "$env_path" ]]; then
+    source "$env_path"
+  else
+    warn "Cargo environment file not found at $env_path. You may need to add cargo to your PATH (e.g. 'export PATH=\"\$HOME/.cargo/bin:\$PATH\"') or restart your shell."
+  fi
 }
 
 build_from_source() {
