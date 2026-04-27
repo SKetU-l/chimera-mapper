@@ -4,10 +4,10 @@ set -euo pipefail
 GREEN='\033[0;32m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; BOLD='\033[1m'; DIM='\033[90m'; RESET='\033[0m'
 
 BIN_NAME="chimera-mapper"
-SERVICE_LABEL="xyz.sketu.chimera-mapper"
+SERVICE_LABEL="com.sketu.chimera-mapper"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
-SYSTEMD_SERVICE="${HOME}/.config/systemd/user/chimera-mapper.service"
+SYSTEMD_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
 
 status() { echo -e "${GREEN}✓${RESET} $1"; }
 step()  { echo -e "\n${BOLD}$1${RESET}"; }
@@ -46,10 +46,10 @@ main() {
     launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" 2>/dev/null || true
     launchctl unload "$plist" 2>/dev/null || true
     rm -f "$plist"
-    rm -f "${HOME}/Library/Logs/chimera-mapper.log" "${HOME}/Library/Logs/chimera-mapper.err.log"
+    rm -f "${HOME}/Library/Logs/${SERVICE_LABEL}.log" "${HOME}/Library/Logs/${SERVICE_LABEL}.err.log"
   else
-    systemctl --user stop chimera-mapper 2>/dev/null || true
-    systemctl --user disable chimera-mapper 2>/dev/null || true
+    systemctl --user stop "$SERVICE_LABEL" 2>/dev/null || true
+    systemctl --user disable "$SERVICE_LABEL" 2>/dev/null || true
     systemctl --user daemon-reload 2>/dev/null || true
     rm -f "$SYSTEMD_SERVICE"
   fi
