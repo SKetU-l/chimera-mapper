@@ -7,7 +7,8 @@ BIN_NAME="chimera-mapper"
 SERVICE_LABEL="com.sketu.chimera-mapper"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
-SYSTEMD_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
+SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
+USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
 
 status() { echo -e "${GREEN}✓${RESET} $1"; }
 step()  { echo -e "\n${BOLD}$1${RESET}"; }
@@ -48,16 +49,32 @@ main() {
     rm -f "$plist"
     rm -f "${HOME}/Library/Logs/${SERVICE_LABEL}.log" "${HOME}/Library/Logs/${SERVICE_LABEL}.err.log"
   else
-    systemctl --user stop "$SERVICE_LABEL" 2>/dev/null || true
-    systemctl --user disable "$SERVICE_LABEL" 2>/dev/null || true
-    systemctl --user daemon-reload 2>/dev/null || true
-    rm -f "$SYSTEMD_SERVICE"
+    if systemctl is-active "$SERVICE_LABEL" &>/dev/null; then
+      sudo systemctl stop "$SERVICE_LABEL" 2>/dev/null || true
+      sudo systemctl disable "$SERVICE_LABEL" 2>/dev/null || true
+    fi
+    if systemctl --user is-active "$SERVICE_LABEL" &>/dev/null; then
+      systemctl --user stop "$SERVICE_LABEL" 2>/dev/null || true
+      systemctl --user disable "$SERVICE_LABEL" 2>/dev/null || true
+    fi
+
+    [[ -f "$SYSTEM_SERVICE" ]] && sudo rm -f "$SYSTEM_SERVICE" && sudo systemctl daemon-reload
+    [[ -f "$USER_SERVICE" ]] && rm -f "$USER_SERVICE" && systemctl --user daemon-reload
   fi
   status "Auto-start disabled"
 
   if [[ "$keep_binary" != "true" ]]; then
     step "Removing files"
-    rm -f "$USER_BIN" "$SYSTEM_BIN" && status "Application removed" || warn "Some files not found (already removed?)"
+    local removed=false
+    if [[ -f "$SYSTEM_BIN" ]]; then
+      sudo rm -f "$SYSTEM_BIN" && status "System binary removed"
+      removed=true
+    fi
+    if [[ -f "$USER_BIN" ]]; then
+      rm -f "$USER_BIN" && status "User binary removed"
+      removed=true
+    fi
+    [[ "$removed" == "false" ]] && warn "Binary not found (already removed?)"
   else
     info "Keeping application file"
   fi
@@ -70,7 +87,6 @@ main() {
   echo ""
   step "Done"
   info "Chimera Mapper has been uninstalled"
-  info "To reinstall: curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts/install.sh | bash"
   echo ""
 }
 

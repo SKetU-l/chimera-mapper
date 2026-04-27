@@ -59,13 +59,31 @@ build_from_source() {
   git clone --depth=1 "$REPO_URL" "$tmp" >&2
 
   step "Compiling (this may take a while)" >&2
-  cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
+  if command -v cargo &>/dev/null; then
+    cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
+  else
+    local env_path="${CARGO_HOME:-$HOME/.cargo}/env"
+    if [[ -f "$env_path" ]]; then
+      source "$env_path"
+      cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
+    else
+      error "Cargo not found." >&2
+      return 1
+    fi
+  fi
 
   local src="$tmp/target/release/${BIN_NAME}"
   [[ -f "$src" ]] || { error "Build failed: binary not found" >&2; return 1; }
-  mkdir -p "$install_dir"
-  cp "$src" "${install_dir}/${BIN_NAME}" && chmod +x "${install_dir}/${BIN_NAME}"
-  echo "${install_dir}/${BIN_NAME}"  # only this goes to stdout → captured into $bin
+
+  if [[ ! -w "$(dirname "$install_dir")" ]] || [[ ! -w "$install_dir" && -d "$install_dir" ]]; then
+    sudo mkdir -p "$install_dir"
+    sudo cp "$src" "${install_dir}/${BIN_NAME}" && sudo chmod +x "${install_dir}/${BIN_NAME}"
+  else
+    mkdir -p "$install_dir"
+    cp "$src" "${install_dir}/${BIN_NAME}" && chmod +x "${install_dir}/${BIN_NAME}"
+  fi
+
+  echo "${install_dir}/${BIN_NAME}"
 }
 
 install_macos_service() {
@@ -87,27 +105,36 @@ install_macos_service() {
 }
 
 install_linux_service() {
-  local bin="$1" service="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
-  mkdir -p "$(dirname "$service")"
-  cat > "$service" <<-SERVICE
+  local bin="$1" service="/etc/systemd/system/${SERVICE_LABEL}.service"
+
+  step "Creating systemd service"
+  sudo tee "$service" > /dev/null <<-SERVICE
 	[Unit]
 	Description=Chimera Mapper
-	After=default.target
+	After=network.target
+
 	[Service]
 	Type=simple
 	ExecStart=$bin run
 	Restart=always
-	RestartSec=2
+	RestartSec=5
+	User=root
+
 	[Install]
-	WantedBy=default.target
+	WantedBy=multi-user.target
 	SERVICE
-  systemctl --user daemon-reload 2>/dev/null || true
-  systemctl --user enable --now "$SERVICE_LABEL" 2>/dev/null || true
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now "$SERVICE_LABEL"
   status "Auto-start enabled"
 }
 
 main() {
-  local install_dir="${HOME}/.local/bin" skip_service=false os arch bin
+  local os=$(detect_os)
+  local install_dir="${HOME}/.local/bin"
+  [[ "$os" == "linux" ]] && install_dir="/usr/local/bin"
+
+  local skip_service=false arch bin
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --install-dir) install_dir="$2"; shift ;;
@@ -118,7 +145,7 @@ main() {
     shift
   done
 
-  os=$(detect_os); arch=$(detect_arch)
+  arch=$(detect_arch)
 
   step "Setting up Chimera Mapper"
   info "System: $(uname -s) ($arch)"
@@ -138,16 +165,27 @@ main() {
   sleep 2
 
   step "Verifying"
-  if   { [[ "$os" == "macos" ]] && launchctl list | grep -q "$SERVICE_LABEL"; } || \
-       { [[ "$os" == "linux" ]] && systemctl --user is-active "$SERVICE_LABEL" &>/dev/null; }; then
-    status "Service is running"
+  if [[ "$os" == "macos" ]]; then
+    if launchctl list | grep -q "$SERVICE_LABEL"; then
+      status "Service is running"
+    else
+      warn "Service may need a moment to start"
+    fi
   else
-    warn "Service may need a moment to start"
+    if systemctl is-active "$SERVICE_LABEL" &>/dev/null; then
+      status "Service is running"
+    else
+      warn "Service may need a moment to start (check: sudo systemctl status $SERVICE_LABEL)"
+    fi
   fi
 
   step "All set!"
   info "To test: $bin run"
-  info "Logs:    tail -f ~/Library/Logs/chimera-mapper.log"
+  if [[ "$os" == "macos" ]]; then
+    info "Logs:    tail -f ~/Library/Logs/chimera-mapper.log"
+  else
+    info "Logs:    sudo journalctl -u $SERVICE_LABEL -f"
+  fi
 }
 
 main "$@"
