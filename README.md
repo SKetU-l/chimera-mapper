@@ -9,7 +9,7 @@ curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts
 ```
 
 The installer will:
-- Download the latest version or build from source
+- Build from source
 - Set up auto-start on system boot
 - Configure the app to run in the background
 
@@ -58,7 +58,7 @@ chimera-mapper --help
 
 ## Status
 
-This project is in active development and is **not ready for download or regular use yet**.  
+This project is ready for daily use on an early stage.
 The first goal is a stable base version.
 
 Current development/testing device: **Kreo Chimera V1**
