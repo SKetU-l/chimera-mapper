@@ -13,8 +13,6 @@ impl Emitter {
         let keys = AttributeSet::<KeyCode>::from_iter([
             KeyCode::BTN_EXTRA,
             KeyCode::BTN_SIDE,
-            KeyCode::KEY_FORWARD,
-            KeyCode::KEY_BACK,
         ]);
         let device = VirtualDevice::builder()?
             .name(name.as_bytes())
@@ -26,14 +24,8 @@ impl Emitter {
     pub fn emit(&mut self, transition: Transition) -> AppResult<()> {
         let value = i32::from(transition.pressed);
         let events: Vec<_> = match transition.kind {
-            ActionKind::Forward => vec![
-                KeyEvent::new(KeyCode::BTN_EXTRA, value).into(),
-                KeyEvent::new(KeyCode::KEY_FORWARD, value).into(),
-            ],
-            ActionKind::Back => vec![
-                KeyEvent::new(KeyCode::BTN_SIDE, value).into(),
-                KeyEvent::new(KeyCode::KEY_BACK, value).into(),
-            ],
+            ActionKind::Forward => vec![KeyEvent::new(KeyCode::BTN_EXTRA, value).into()],
+            ActionKind::Back => vec![KeyEvent::new(KeyCode::BTN_SIDE, value).into()],
         };
         self.device.emit(&events[..])?;
         Ok(())
