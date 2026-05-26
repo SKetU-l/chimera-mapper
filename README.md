@@ -71,8 +71,6 @@ Other brands/models are **not tested yet**, so compatibility is **not confirmed*
 
 - [ ] Custom key mapping (allow users to set custom shortcuts or options instead of just Forward/Back)
 - [ ] Graphical User Interface (GUI)
-- [ ] Better diagnostics and troubleshooting logs
-- [ ] Cleaner end-user setup/usage documentation
 
 ---
 
