@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use hidapi::HidApi;
 use std::time::Duration;
 
+mod action;
 mod backend;
 mod config;
 mod hid;
@@ -30,7 +31,7 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
     let api = HidApi::new()?;
     let args = resolve_run_args(&api, args)?;
     let device = open_device(&api, &args)?;
-    let cfg = mapping_from_args(&args);
+    let cfg = mapping_from_args(&args).resolve()?;
     let mut buf = vec![0u8; args.report_len];
 
     loop {
@@ -82,7 +83,7 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
             });
         }
 
-        let cfg = mapping_from_args(&resolved);
+        let cfg = mapping_from_args(&resolved).resolve()?;
         let mut buf = vec![0u8; resolved.report_len];
         eprintln!("device connected, listening for events");
 
@@ -101,8 +102,8 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                             .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49)
                         {
                             eprintln!("wired device detected; switching over");
-                            for transition in state.synthesize_releases() {
-                                let _ = emitter.emit(transition);
+                            for transition in state.synthesize_releases(&cfg) {
+                                let _ = emitter.emit(&transition);
                             }
                             break;
                         }
@@ -110,14 +111,14 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                     continue;
                 }
                 Ok(size) => {
-                    for transition in state.update(cfg, &buf[..size]) {
-                        emitter.emit(transition)?;
+                    for transition in state.update(&cfg, &buf[..size]) {
+                        emitter.emit(&transition)?;
                     }
                 }
                 Err(e) => {
                     eprintln!("device disconnected ({e}); reconnecting in 500ms");
-                    for transition in state.synthesize_releases() {
-                        let _ = emitter.emit(transition);
+                    for transition in state.synthesize_releases(&cfg) {
+                        let _ = emitter.emit(&transition);
                     }
                     std::thread::sleep(Duration::from_millis(500));
                     break;

@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use crate::config::{AppResult, MappingConfig, SavedProfile, load_config};
+use crate::config::{AppResult, MappingConfig, ResolvedMapping, SavedProfile, load_config};
+use crate::action::Action;
 
 #[derive(Args, Clone)]
 pub struct RunArgs {
@@ -30,6 +31,10 @@ pub struct RunArgs {
     pub side_mask: u8,
     #[arg(long, value_parser = parse_u8, default_value = "0x08")]
     pub extra_mask: u8,
+    #[arg(long, default_value = "forward")]
+    pub side_action: String,
+    #[arg(long, default_value = "back")]
+    pub extra_action: String,
     #[arg(long, default_value_t = 250)]
     pub timeout_ms: i32,
     #[arg(long, default_value = "chimera-mapper")]
@@ -42,20 +47,14 @@ pub struct MapperState {
     pub prev_back: bool,
 }
 
-#[derive(Clone, Copy)]
-pub enum ActionKind {
-    Forward,
-    Back,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug)]
 pub struct Transition {
-    pub kind: ActionKind,
+    pub action: Action,
     pub pressed: bool,
 }
 
 impl MapperState {
-    pub fn update(&mut self, cfg: MappingConfig, report: &[u8]) -> Vec<Transition> {
+    pub fn update(&mut self, cfg: &ResolvedMapping, report: &[u8]) -> Vec<Transition> {
         if report.len() <= cfg.button_byte {
             return Vec::new();
         }
@@ -65,14 +64,14 @@ impl MapperState {
         let mut out = Vec::with_capacity(2);
         if forward != self.prev_forward {
             out.push(Transition {
-                kind: ActionKind::Forward,
+                action: cfg.side_action.clone(),
                 pressed: forward,
             });
             self.prev_forward = forward;
         }
         if back != self.prev_back {
             out.push(Transition {
-                kind: ActionKind::Back,
+                action: cfg.extra_action.clone(),
                 pressed: back,
             });
             self.prev_back = back;
@@ -80,18 +79,18 @@ impl MapperState {
         out
     }
 
-    pub fn synthesize_releases(&mut self) -> Vec<Transition> {
+    pub fn synthesize_releases(&mut self, cfg: &ResolvedMapping) -> Vec<Transition> {
         let mut out = Vec::new();
         if self.prev_forward {
             out.push(Transition {
-                kind: ActionKind::Forward,
+                action: cfg.side_action.clone(),
                 pressed: false,
             });
             self.prev_forward = false;
         }
         if self.prev_back {
             out.push(Transition {
-                kind: ActionKind::Back,
+                action: cfg.extra_action.clone(),
                 pressed: false,
             });
             self.prev_back = false;
@@ -180,6 +179,8 @@ pub fn mapping_from_args(args: &RunArgs) -> MappingConfig {
         button_byte: args.button_byte,
         side_mask: args.side_mask,
         extra_mask: args.extra_mask,
+        side_action: args.side_action.clone(),
+        extra_action: args.extra_action.clone(),
     }
 }
 
@@ -208,6 +209,8 @@ pub fn apply_saved_profile(args: &RunArgs, profile: &SavedProfile) -> RunArgs {
     resolved.button_byte = profile.mapping.button_byte;
     resolved.side_mask = profile.mapping.side_mask;
     resolved.extra_mask = profile.mapping.extra_mask;
+    resolved.side_action = profile.mapping.side_action.clone();
+    resolved.extra_action = profile.mapping.extra_action.clone();
     resolved
 }
 
