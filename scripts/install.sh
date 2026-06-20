@@ -6,6 +6,8 @@ REPO_NAME="chimera-mapper"
 BIN_NAME="chimera-mapper"
 SERVICE_LABEL="com.sketu.chimera-mapper"
 REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
+LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 
 G='\033[0;32m' Y='\033[0;33m' R='\033[0;31m' B='\033[1m' D='\033[90m' N='\033[0m'
 status() { echo -e "${G}✓${N} $1"; }
@@ -86,6 +88,48 @@ build_from_source() {
   echo "${install_dir}/${BIN_NAME}"
 }
 
+ensure_linux_input_runtime() {
+  step "Preparing Linux input runtime"
+
+  if [[ ! -e /dev/uinput ]] && command -v modprobe &>/dev/null; then
+    sudo modprobe uinput 2>/dev/null || true
+  fi
+
+  if [[ ! -e /dev/uinput ]]; then
+    error "/dev/uinput is not available. Chimera Mapper cannot create a virtual keyboard/mouse without the Linux uinput module."
+    error "Try installing/loading your kernel's uinput module, then rerun this installer."
+    return 1
+  fi
+
+  if ! getent group input >/dev/null; then
+    sudo groupadd --system input
+  fi
+
+  echo "uinput" | sudo tee "$LINUX_MODULES_LOAD" >/dev/null
+  sudo tee "$LINUX_UDEV_RULES" >/dev/null <<-RULES
+	# Allow Chimera Mapper to create virtual input events and read the Chimera mouse.
+	KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b49", MODE="0660", GROUP="input"
+	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b4a", MODE="0660", GROUP="input"
+	RULES
+
+  sudo usermod -aG input "${USER}"
+  sudo udevadm control --reload-rules 2>/dev/null || true
+  sudo udevadm trigger 2>/dev/null || true
+
+  if command -v setfacl &>/dev/null; then
+    sudo setfacl -m "u:${USER}:rw" /dev/uinput 2>/dev/null || true
+    for dev in /dev/hidraw*; do
+      [[ -e "$dev" ]] || continue
+      if udevadm info -q property -n "$dev" 2>/dev/null | grep -Eq '^(ID_VENDOR_ID|HID_ID)=.*248a'; then
+        sudo setfacl -m "u:${USER}:rw" "$dev" 2>/dev/null || true
+      fi
+    done
+  fi
+
+  status "uinput and udev rules configured"
+}
+
 install_macos_service() {
   local bin="$1" plist="${HOME}/Library/LaunchAgents/${SERVICE_LABEL}.plist"
   mkdir -p "$(dirname "$plist")"
@@ -105,28 +149,52 @@ install_macos_service() {
 }
 
 install_linux_service() {
-  local bin="$1" service="/etc/systemd/system/${SERVICE_LABEL}.service"
+  local bin="$1" system_service="/etc/systemd/system/${SERVICE_LABEL}.service"
+  local user_service="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
+  local user_config_home="${HOME}/.config"
 
-  step "Creating systemd service"
-  sudo tee "$service" > /dev/null <<-SERVICE
+  ensure_linux_input_runtime
+
+  step "Creating system service"
+
+  systemctl --user stop         "${SERVICE_LABEL}" 2>/dev/null || true
+  systemctl --user disable      "${SERVICE_LABEL}" 2>/dev/null || true
+  systemctl --user reset-failed "${SERVICE_LABEL}" 2>/dev/null || true
+  [[ -f "$user_service" ]] && rm -f "$user_service"
+  systemctl --user daemon-reload 2>/dev/null || true
+
+  sudo systemctl stop         "${SERVICE_LABEL}" 2>/dev/null || true
+  sudo systemctl disable      "${SERVICE_LABEL}" 2>/dev/null || true
+  sudo systemctl reset-failed "${SERVICE_LABEL}" 2>/dev/null || true
+
+  sudo tee "$system_service" > /dev/null <<-SERVICE
 	[Unit]
 	Description=Chimera Mapper
-	After=network.target
+	Wants=systemd-modules-load.service systemd-udevd.service
+	After=systemd-modules-load.service systemd-udevd.service
+	StartLimitIntervalSec=0
 
 	[Service]
 	Type=simple
+	Environment=XDG_CONFIG_HOME=$user_config_home
+	ExecStartPre=/bin/sh -c 'modprobe uinput 2>/dev/null || true'
+	ExecStartPre=/bin/sh -c 'udevadm settle --timeout=10 2>/dev/null || true'
+	ExecStartPre=/bin/sh -c 'test -e /dev/uinput'
 	ExecStart=$bin run
 	Restart=always
-	RestartSec=5
+	RestartSec=2
 	User=root
+	StandardOutput=journal
+	StandardError=journal
 
 	[Install]
 	WantedBy=multi-user.target
 	SERVICE
 
   sudo systemctl daemon-reload
-  sudo systemctl enable --now "$SERVICE_LABEL"
-  status "Auto-start enabled"
+  sudo systemctl enable "${SERVICE_LABEL}"
+  sudo systemctl restart "${SERVICE_LABEL}"
+  status "System-level auto-start enabled"
 }
 
 main() {
@@ -175,7 +243,8 @@ main() {
     if systemctl is-active "$SERVICE_LABEL" &>/dev/null; then
       status "Service is running"
     else
-      warn "Service may need a moment to start (check: sudo systemctl status $SERVICE_LABEL)"
+      warn "System service failed to start (check: sudo systemctl status $SERVICE_LABEL)"
+      sudo systemctl --no-pager --full status "$SERVICE_LABEL" || true
     fi
   fi
 

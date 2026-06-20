@@ -9,6 +9,8 @@ USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
 SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
 USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
+LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
+LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 
 status() { echo -e "${GREEN}✓${RESET} $1"; }
 step()  { echo -e "\n${BOLD}$1${RESET}"; }
@@ -49,17 +51,17 @@ main() {
     rm -f "$plist"
     rm -f "${HOME}/Library/Logs/${SERVICE_LABEL}.log" "${HOME}/Library/Logs/${SERVICE_LABEL}.err.log"
   else
-    if systemctl is-active "$SERVICE_LABEL" &>/dev/null; then
-      sudo systemctl stop "$SERVICE_LABEL" 2>/dev/null || true
-      sudo systemctl disable "$SERVICE_LABEL" 2>/dev/null || true
-    fi
-    if systemctl --user is-active "$SERVICE_LABEL" &>/dev/null; then
-      systemctl --user stop "$SERVICE_LABEL" 2>/dev/null || true
-      systemctl --user disable "$SERVICE_LABEL" 2>/dev/null || true
-    fi
+    sudo systemctl stop         "$SERVICE_LABEL" 2>/dev/null || true
+    sudo systemctl disable      "$SERVICE_LABEL" 2>/dev/null || true
+    sudo systemctl reset-failed "$SERVICE_LABEL" 2>/dev/null || true
+    systemctl --user stop         "$SERVICE_LABEL" 2>/dev/null || true
+    systemctl --user disable      "$SERVICE_LABEL" 2>/dev/null || true
+    systemctl --user reset-failed "$SERVICE_LABEL" 2>/dev/null || true
 
     [[ -f "$SYSTEM_SERVICE" ]] && sudo rm -f "$SYSTEM_SERVICE" && sudo systemctl daemon-reload
     [[ -f "$USER_SERVICE" ]] && rm -f "$USER_SERVICE" && systemctl --user daemon-reload
+    [[ -f "$LINUX_MODULES_LOAD" ]] && sudo rm -f "$LINUX_MODULES_LOAD"
+    [[ -f "$LINUX_UDEV_RULES" ]] && sudo rm -f "$LINUX_UDEV_RULES" && sudo udevadm control --reload-rules 2>/dev/null || true
   fi
   status "Auto-start disabled"
 

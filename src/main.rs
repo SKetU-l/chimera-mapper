@@ -54,7 +54,15 @@ fn run_dump(args: RunArgs) -> AppResult<()> {
 
 fn run_mapper(args: RunArgs) -> AppResult<()> {
     let mut state = MapperState::default();
-    let mut emitter = backend::Emitter::new(&args.name)?;
+    let mut emitter = loop {
+        match backend::Emitter::new(&args.name) {
+            Ok(emitter) => break emitter,
+            Err(e) => {
+                eprintln!("failed to initialize virtual input device: {e}; retrying in 2s");
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+    };
 
     loop {
         let api = HidApi::new()?;
