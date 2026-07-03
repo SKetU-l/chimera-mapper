@@ -87,10 +87,7 @@ define_str_enum! {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
-    Keys {
-        modifiers: Vec<Modifier>,
-        key: Key,
-    },
+    Keys { modifiers: Vec<Modifier>, key: Key },
     Mouse(MouseButton),
 }
 
@@ -120,8 +117,8 @@ impl FromStr for Action {
         }
 
         let key_str = parts[parts.len() - 1];
-        let key = Key::from_str_lower(key_str)
-            .ok_or_else(|| format!("unknown key: {}", key_str))?;
+        let key =
+            Key::from_str_lower(key_str).ok_or_else(|| format!("unknown key: {}", key_str))?;
 
         Ok(Action::Keys { modifiers, key })
     }
@@ -165,10 +162,34 @@ mod tests {
 
     #[test]
     fn test_parse_single_keys() {
-        assert_eq!("enter".parse::<Action>().unwrap(), Action::Keys { modifiers: vec![], key: Key::Enter });
-        assert_eq!("a".parse::<Action>().unwrap(), Action::Keys { modifiers: vec![], key: Key::A });
-        assert_eq!("f12".parse::<Action>().unwrap(), Action::Keys { modifiers: vec![], key: Key::F12 });
-        assert_eq!("esc".parse::<Action>().unwrap(), Action::Keys { modifiers: vec![], key: Key::Escape });
+        assert_eq!(
+            "enter".parse::<Action>().unwrap(),
+            Action::Keys {
+                modifiers: vec![],
+                key: Key::Enter
+            }
+        );
+        assert_eq!(
+            "a".parse::<Action>().unwrap(),
+            Action::Keys {
+                modifiers: vec![],
+                key: Key::A
+            }
+        );
+        assert_eq!(
+            "f12".parse::<Action>().unwrap(),
+            Action::Keys {
+                modifiers: vec![],
+                key: Key::F12
+            }
+        );
+        assert_eq!(
+            "esc".parse::<Action>().unwrap(),
+            Action::Keys {
+                modifiers: vec![],
+                key: Key::Escape
+            }
+        );
     }
 
     #[test]
@@ -198,11 +219,26 @@ mod tests {
 
     #[test]
     fn test_parse_mouse_buttons() {
-        assert_eq!("mouse_left".parse::<Action>().unwrap(), Action::Mouse(MouseButton::Left));
-        assert_eq!("mouse_back".parse::<Action>().unwrap(), Action::Mouse(MouseButton::Back));
-        assert_eq!("btn_side".parse::<Action>().unwrap(), Action::Mouse(MouseButton::Back));
-        assert_eq!("forward".parse::<Action>().unwrap(), Action::Mouse(MouseButton::Forward));
-        assert_eq!("back".parse::<Action>().unwrap(), Action::Mouse(MouseButton::Back));
+        assert_eq!(
+            "mouse_left".parse::<Action>().unwrap(),
+            Action::Mouse(MouseButton::Left)
+        );
+        assert_eq!(
+            "mouse_back".parse::<Action>().unwrap(),
+            Action::Mouse(MouseButton::Back)
+        );
+        assert_eq!(
+            "btn_side".parse::<Action>().unwrap(),
+            Action::Mouse(MouseButton::Back)
+        );
+        assert_eq!(
+            "forward".parse::<Action>().unwrap(),
+            Action::Mouse(MouseButton::Forward)
+        );
+        assert_eq!(
+            "back".parse::<Action>().unwrap(),
+            Action::Mouse(MouseButton::Back)
+        );
     }
 
     #[test]
@@ -222,20 +258,39 @@ mod tests {
 
     #[test]
     fn test_parse_errors() {
-        assert!(""          .parse::<Action>().is_err());
-        assert!("  "        .parse::<Action>().is_err());
+        assert!("".parse::<Action>().is_err());
+        assert!("  ".parse::<Action>().is_err());
         assert!("unknown_xyz".parse::<Action>().is_err());
         assert!("ctrl+unknown".parse::<Action>().is_err());
-        assert!("fakemeta+a" .parse::<Action>().is_err());
-        assert!("mouse_nope" .parse::<Action>().is_err());
+        assert!("fakemeta+a".parse::<Action>().is_err());
+        assert!("mouse_nope".parse::<Action>().is_err());
     }
 
     #[test]
     fn test_round_trip_keys() {
-        let keys = ["a", "z", "0", "9", "f1", "f12", "enter", "space",
-                     "tab", "backspace", "escape", "delete", "insert",
-                     "home", "end", "pageup", "pagedown",
-                     "left", "right", "up", "down"];
+        let keys = [
+            "a",
+            "z",
+            "0",
+            "9",
+            "f1",
+            "f12",
+            "enter",
+            "space",
+            "tab",
+            "backspace",
+            "escape",
+            "delete",
+            "insert",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "left",
+            "right",
+            "up",
+            "down",
+        ];
         for k in keys {
             let action: Action = k.parse().unwrap();
             let reparsed: Action = action.to_string().parse().unwrap();
@@ -245,7 +300,13 @@ mod tests {
 
     #[test]
     fn test_round_trip_mouse() {
-        let buttons = ["mouse_left", "mouse_right", "mouse_middle", "mouse_back", "mouse_forward"];
+        let buttons = [
+            "mouse_left",
+            "mouse_right",
+            "mouse_middle",
+            "mouse_back",
+            "mouse_forward",
+        ];
         for b in buttons {
             let action: Action = b.parse().unwrap();
             let reparsed: Action = action.to_string().parse().unwrap();
@@ -255,7 +316,13 @@ mod tests {
 
     #[test]
     fn test_round_trip_combos() {
-        let combos = ["ctrl+a", "shift+f5", "alt+tab", "meta+space", "ctrl+shift+delete"];
+        let combos = [
+            "ctrl+a",
+            "shift+f5",
+            "alt+tab",
+            "meta+space",
+            "ctrl+shift+delete",
+        ];
         for c in combos {
             let action: Action = c.parse().unwrap();
             let reparsed: Action = action.to_string().parse().unwrap();

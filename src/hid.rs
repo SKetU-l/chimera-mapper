@@ -39,6 +39,8 @@ pub struct RunArgs {
     pub timeout_ms: i32,
     #[arg(long, default_value = "chimera-mapper")]
     pub name: String,
+    #[arg(long, default_value_t = false)]
+    pub no_grab_source: bool,
 }
 
 #[derive(Default)]

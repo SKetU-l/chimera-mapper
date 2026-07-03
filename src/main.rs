@@ -91,11 +91,15 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
             }
         };
 
-        let _source_grab = match backend::SourceGrab::acquire(resolved.vid, resolved.pid) {
-            Ok(grab) => grab,
-            Err(e) => {
-                eprintln!("warning: source grab failed: {e}; continuing without suppression");
-                None
+        let _source_grab = if args.no_grab_source {
+            None
+        } else {
+            match backend::SourceGrab::acquire(resolved.vid, resolved.pid) {
+                Ok(grab) => grab,
+                Err(e) => {
+                    eprintln!("warning: source grab failed: {e}; continuing without suppression");
+                    None
+                }
             }
         };
 

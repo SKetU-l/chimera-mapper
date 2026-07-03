@@ -3,7 +3,7 @@ use crate::config::AppResult;
 use crate::hid::Transition;
 use evdev::event_variants::KeyEvent;
 use evdev::uinput::VirtualDevice;
-use evdev::{AttributeSet, Device as RawDevice, KeyCode};
+use evdev::{AttributeSet, Device as RawDevice, KeyCode, RelativeAxisCode};
 
 pub struct Emitter {
     device: VirtualDevice,
@@ -25,30 +25,63 @@ impl SourceGrab {
                 continue;
             };
             let id = dev.input_id();
-            if id.vendor() == vid && id.product() == pid {
-                match dev.grab() {
-                    Ok(()) => {
-                        eprintln!(
-                            "grabbed source evdev device {} (vid=0x{:04x} pid=0x{:04x}) to suppress native side-button passthrough",
-                            path.display(),
-                            vid,
-                            pid
-                        );
-                        return Ok(Some(Self { _device: dev, path }));
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "warning: could not grab {} (in use by another exclusive client?): {}",
-                            path.display(),
-                            e
-                        );
-                    }
+            if id.vendor() != vid || id.product() != pid {
+                continue;
+            }
+
+            if !is_safe_to_grab(&dev) {
+                eprintln!(
+                    "skipping evdev node {} (vid=0x{:04x} pid=0x{:04x}): composite pointer/click interface, grabbing would freeze the mouse",
+                    path.display(),
+                    vid,
+                    pid
+                );
+                continue;
+            }
+
+            match dev.grab() {
+                Ok(()) => {
+                    eprintln!(
+                        "grabbed isolated side-button evdev node {} (vid=0x{:04x} pid=0x{:04x}) to suppress native passthrough",
+                        path.display(),
+                        vid,
+                        pid
+                    );
+                    return Ok(Some(Self { _device: dev, path }));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "warning: could not grab {} (in use by another exclusive client?): {}",
+                        path.display(),
+                        e
+                    );
                 }
             }
         }
         Ok(None)
     }
+}
+
+fn is_safe_to_grab(dev: &RawDevice) -> bool {
+    let keys = dev.supported_keys();
+    let has_side =
+        keys.is_some_and(|k| k.contains(KeyCode::BTN_SIDE) || k.contains(KeyCode::BTN_EXTRA));
+    if !has_side {
+        return false;
     }
+    let has_primary_click = keys.is_some_and(|k| {
+        k.contains(KeyCode::BTN_LEFT)
+            || k.contains(KeyCode::BTN_RIGHT)
+            || k.contains(KeyCode::BTN_MIDDLE)
+    });
+    if has_primary_click {
+        return false;
+    }
+    let has_movement = dev.supported_relative_axes().is_some_and(|r| {
+        r.contains(RelativeAxisCode::REL_X) || r.contains(RelativeAxisCode::REL_Y)
+    });
+    !has_movement
+}
 
 impl Drop for SourceGrab {
     fn drop(&mut self) {

@@ -36,9 +36,13 @@ pub struct ResolvedMapping {
 
 impl MappingConfig {
     pub fn resolve(&self) -> AppResult<ResolvedMapping> {
-        let side_action: Action = self.side_action.parse()
+        let side_action: Action = self
+            .side_action
+            .parse()
             .map_err(|e: String| format!("invalid side_action '{}': {}", self.side_action, e))?;
-        let extra_action: Action = self.extra_action.parse()
+        let extra_action: Action = self
+            .extra_action
+            .parse()
             .map_err(|e: String| format!("invalid extra_action '{}': {}", self.extra_action, e))?;
         Ok(ResolvedMapping {
             button_byte: self.button_byte,
