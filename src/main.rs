@@ -100,24 +100,26 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
         let mut api = api;
 
         loop {
-            match device.read_timeout(&mut buf, resolved.timeout_ms) {
-                Ok(0) => {
-                    if is_wireless && last_refresh.elapsed() > Duration::from_secs(2) {
-                        last_refresh = std::time::Instant::now();
-                        let _ = api.refresh_devices();
-                        if api
-                            .device_list()
-                            .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49)
-                        {
-                            eprintln!("wired device detected; switching over");
-                            for transition in state.synthesize_releases(&cfg) {
-                                let _ = emitter.emit(&transition);
-                            }
-                            break;
-                        }
+            // Check periodically for wired device takeover regardless of data flow.
+            if is_wireless && last_refresh.elapsed() > Duration::from_secs(2) {
+                last_refresh = std::time::Instant::now();
+                let _ = api.refresh_devices();
+                if api
+                    .device_list()
+                    .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49)
+                {
+                    eprintln!("wired device detected; switching over");
+                    for transition in state.synthesize_releases(&cfg) {
+                        let _ = emitter.emit(&transition);
                     }
-                    continue;
+                    break;
                 }
+            }
+
+            // Use a small timeout so the periodic check above runs frequently.
+            const POLL_TIMEOUT_MS: i32 = 20;
+            match device.read_timeout(&mut buf, POLL_TIMEOUT_MS) {
+                Ok(0) => continue,
                 Ok(size) => {
                     for transition in state.update(&cfg, &buf[..size]) {
                         emitter.emit(&transition)?;

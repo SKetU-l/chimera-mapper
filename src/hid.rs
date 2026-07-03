@@ -389,9 +389,10 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
             let saved_args = apply_saved_profile(&args, &profile);
 
             let is_saved_wireless = profile.vid == 0x248a && profile.pid == 0x5b4a;
-            if has_wired && is_saved_wireless {
-            } else if open_device(api, &saved_args).is_ok() {
-                return Ok(saved_args);
+            if !(has_wired && is_saved_wireless) {
+                if open_device(api, &saved_args).is_ok() {
+                    return Ok(saved_args);
+                }
             }
         }
     }
