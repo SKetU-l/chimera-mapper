@@ -1,12 +1,75 @@
+use crate::action::{Action, Key, Modifier, MouseButton};
 use crate::config::AppResult;
 use crate::hid::Transition;
-use crate::action::{Action, Modifier, Key, MouseButton};
 use evdev::event_variants::KeyEvent;
 use evdev::uinput::VirtualDevice;
-use evdev::{AttributeSet, KeyCode};
+use evdev::{AttributeSet, Device as RawDevice, KeyCode};
 
 pub struct Emitter {
     device: VirtualDevice,
+}
+
+pub struct SourceGrab {
+    _device: RawDevice,
+    path: std::path::PathBuf,
+}
+
+impl SourceGrab {
+    pub fn acquire(vid: Option<u16>, pid: Option<u16>) -> AppResult<Option<Self>> {
+        let (Some(vid), Some(pid)) = (vid, pid) else {
+            return Ok(None);
+        };
+
+        for path in evdev_devices() {
+            let Ok(mut dev) = RawDevice::open(&path) else {
+                continue;
+            };
+            let id = dev.input_id();
+            if id.vendor() == vid && id.product() == pid {
+                match dev.grab() {
+                    Ok(()) => {
+                        eprintln!(
+                            "grabbed source evdev device {} (vid=0x{:04x} pid=0x{:04x}) to suppress native side-button passthrough",
+                            path.display(),
+                            vid,
+                            pid
+                        );
+                        return Ok(Some(Self { _device: dev, path }));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: could not grab {} (in use by another exclusive client?): {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+    }
+
+impl Drop for SourceGrab {
+    fn drop(&mut self) {
+        eprintln!("released source evdev grab on {}", self.path.display());
+    }
+}
+
+fn evdev_devices() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/dev/input") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("event") {
+            continue;
+        }
+        out.push(entry.path());
+    }
+    out
 }
 
 variant_map! {

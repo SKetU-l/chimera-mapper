@@ -85,6 +85,14 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
             }
         };
 
+        let _source_grab = match backend::SourceGrab::acquire(resolved.vid, resolved.pid) {
+            Ok(grab) => grab,
+            Err(e) => {
+                eprintln!("warning: source grab failed: {e}; continuing without suppression");
+                None
+            }
+        };
+
         if let Some(profile) = saved_profile_from_args(&resolved) {
             let _ = save_config(&AppConfig {
                 profile: Some(profile),
@@ -108,7 +116,8 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                 let has_wired = api
                     .device_list()
                     .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
-                let is_wireless_active = resolved.vid == Some(0x248a) && resolved.pid == Some(0x5b4a);
+                let is_wireless_active =
+                    resolved.vid == Some(0x248a) && resolved.pid == Some(0x5b4a);
 
                 if is_wireless_active && has_wired {
                     eprintln!("wired device detected; switching over");
@@ -132,7 +141,6 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                 }
             }
 
-            // Use a small timeout so the periodic check above runs frequently.
             const POLL_TIMEOUT_MS: i32 = 20;
             match device.read_timeout(&mut buf, POLL_TIMEOUT_MS) {
                 Ok(0) => {

@@ -13,14 +13,14 @@ macro_rules! variant_map {
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
-pub use macos::Emitter;
+pub use macos::{Emitter, SourceGrab};
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
-pub use linux::Emitter;
+pub use linux::{Emitter, SourceGrab};
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod stub;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub use stub::Emitter;
+pub use stub::{Emitter, SourceGrab};

@@ -1,13 +1,19 @@
-use crate::hid::Transition;
+use crate::action::{Action, Key, Modifier, MouseButton};
 use crate::config::AppResult;
-use crate::action::{Action, Modifier, Key, MouseButton};
-use core_graphics::event::{
-    CGEvent, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
-};
+use crate::hid::Transition;
+use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton, EventField};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 pub struct Emitter {
     source: CGEventSource,
+}
+
+pub struct SourceGrab;
+
+impl SourceGrab {
+    pub fn acquire(_vid: Option<u16>, _pid: Option<u16>) -> AppResult<Option<Self>> {
+        Ok(None)
+    }
 }
 
 variant_map! {
@@ -65,8 +71,12 @@ impl Emitter {
                 let keycode = key_to_mac(*key);
                 if pressed {
                     for &m in modifiers {
-                        let ev = CGEvent::new_keyboard_event(self.source.clone(), modifier_to_mac(m), true)
-                            .map_err(|_| "failed to create macOS keyboard event")?;
+                        let ev = CGEvent::new_keyboard_event(
+                            self.source.clone(),
+                            modifier_to_mac(m),
+                            true,
+                        )
+                        .map_err(|_| "failed to create macOS keyboard event")?;
                         ev.post(CGEventTapLocation::HID);
                     }
                     let ev = CGEvent::new_keyboard_event(self.source.clone(), keycode, true)
@@ -77,8 +87,12 @@ impl Emitter {
                         .map_err(|_| "failed to create macOS keyboard event")?;
                     ev.post(CGEventTapLocation::HID);
                     for &m in modifiers.iter().rev() {
-                        let ev = CGEvent::new_keyboard_event(self.source.clone(), modifier_to_mac(m), false)
-                            .map_err(|_| "failed to create macOS keyboard event")?;
+                        let ev = CGEvent::new_keyboard_event(
+                            self.source.clone(),
+                            modifier_to_mac(m),
+                            false,
+                        )
+                        .map_err(|_| "failed to create macOS keyboard event")?;
                         ev.post(CGEventTapLocation::HID);
                     }
                 }
@@ -90,27 +104,47 @@ impl Emitter {
 
                 let (event_type, button_type, button_number) = match btn {
                     MouseButton::Left => (
-                        if pressed { CGEventType::LeftMouseDown } else { CGEventType::LeftMouseUp },
+                        if pressed {
+                            CGEventType::LeftMouseDown
+                        } else {
+                            CGEventType::LeftMouseUp
+                        },
                         CGMouseButton::Left,
                         0_i64,
                     ),
                     MouseButton::Right => (
-                        if pressed { CGEventType::RightMouseDown } else { CGEventType::RightMouseUp },
+                        if pressed {
+                            CGEventType::RightMouseDown
+                        } else {
+                            CGEventType::RightMouseUp
+                        },
                         CGMouseButton::Right,
                         1_i64,
                     ),
                     MouseButton::Middle => (
-                        if pressed { CGEventType::OtherMouseDown } else { CGEventType::OtherMouseUp },
+                        if pressed {
+                            CGEventType::OtherMouseDown
+                        } else {
+                            CGEventType::OtherMouseUp
+                        },
                         CGMouseButton::Center,
                         2_i64,
                     ),
                     MouseButton::Back => (
-                        if pressed { CGEventType::OtherMouseDown } else { CGEventType::OtherMouseUp },
+                        if pressed {
+                            CGEventType::OtherMouseDown
+                        } else {
+                            CGEventType::OtherMouseUp
+                        },
                         CGMouseButton::Center,
                         3_i64,
                     ),
                     MouseButton::Forward => (
-                        if pressed { CGEventType::OtherMouseDown } else { CGEventType::OtherMouseUp },
+                        if pressed {
+                            CGEventType::OtherMouseDown
+                        } else {
+                            CGEventType::OtherMouseUp
+                        },
                         CGMouseButton::Center,
                         4_i64,
                     ),
