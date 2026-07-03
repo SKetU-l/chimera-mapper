@@ -167,9 +167,13 @@ impl Emitter {
         for code in 0..=767 {
             keys.insert(KeyCode::new(code));
         }
+        let mut rel = AttributeSet::<RelativeAxisCode>::new();
+        rel.insert(RelativeAxisCode::REL_X);
+        rel.insert(RelativeAxisCode::REL_Y);
         let device = VirtualDevice::builder()?
             .name(name.as_bytes())
             .with_keys(&keys)?
+            .with_relative_axes(&rel)?
             .build()?;
         Ok(Self { device })
     }
