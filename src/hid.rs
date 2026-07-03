@@ -4,8 +4,8 @@ use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use crate::config::{AppResult, MappingConfig, ResolvedMapping, SavedProfile, load_config};
 use crate::action::Action;
+use crate::config::{AppResult, MappingConfig, ResolvedMapping, SavedProfile, load_config};
 
 #[derive(Args, Clone)]
 pub struct RunArgs {
@@ -162,6 +162,13 @@ pub fn list_devices() -> AppResult<()> {
         println!("{}", format_device(device));
     }
     Ok(())
+}
+
+pub fn device_path_present(api: &HidApi, path: &Option<String>) -> bool {
+    path.as_ref().is_some_and(|p| {
+        api.device_list()
+            .any(|d| d.path().to_string_lossy() == p.as_str())
+    })
 }
 
 pub fn has_explicit_device_selector(args: &RunArgs) -> bool {
@@ -471,17 +478,7 @@ pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
                 "multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path"
             );
             for device in many {
-                eprintln!(
-                    "  path={} vid=0x{:04x} pid=0x{:04x} usage_page=0x{:04x} usage=0x{:04x} iface={} product={} serial={}",
-                    device.path().to_string_lossy(),
-                    device.vendor_id(),
-                    device.product_id(),
-                    device.usage_page(),
-                    device.usage(),
-                    device.interface_number(),
-                    device.product_string().unwrap_or("-"),
-                    device.serial_number().unwrap_or("-"),
-                );
+                eprintln!("  {}", format_device(device));
             }
             Err("device selection was ambiguous".into())
         }

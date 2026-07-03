@@ -7,10 +7,10 @@ mod backend;
 mod config;
 mod hid;
 
-use config::{AppConfig, AppResult, save_config};
+use config::{AppConfig, AppResult, ResolvedMapping, save_config};
 use hid::{
-    MapperState, RunArgs, format_report, list_devices, mapping_from_args, open_device,
-    resolve_run_args, saved_profile_from_args,
+    MapperState, RunArgs, device_path_present, format_report, list_devices, mapping_from_args,
+    open_device, resolve_run_args, saved_profile_from_args,
 };
 
 #[derive(Parser)]
@@ -25,6 +25,12 @@ enum Command {
     List,
     Dump(RunArgs),
     Run(RunArgs),
+}
+
+fn release_all(state: &mut MapperState, cfg: &ResolvedMapping, emitter: &mut backend::Emitter) {
+    for transition in state.synthesize_releases(cfg) {
+        let _ = emitter.emit(&transition);
+    }
 }
 
 fn run_dump(args: RunArgs) -> AppResult<()> {
@@ -121,21 +127,13 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
 
                 if is_wireless_active && has_wired {
                     eprintln!("wired device detected; switching over");
-                    for transition in state.synthesize_releases(&cfg) {
-                        let _ = emitter.emit(&transition);
-                    }
+                    release_all(&mut state, &cfg, &mut emitter);
                     break;
                 }
 
-                let current_present = current_path.as_ref().is_some_and(|p| {
-                    api.device_list()
-                        .any(|d| d.path().to_string_lossy() == p.as_str())
-                });
-                if !current_present {
+                if !device_path_present(&api, &current_path) {
                     eprintln!("current device no longer visible; reconnecting");
-                    for transition in state.synthesize_releases(&cfg) {
-                        let _ = emitter.emit(&transition);
-                    }
+                    release_all(&mut state, &cfg, &mut emitter);
                     std::thread::sleep(Duration::from_millis(500));
                     break;
                 }
@@ -148,14 +146,8 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                         if start.elapsed() > SILENT_RECONNECT_AFTER {
                             eprintln!("device went silent; refreshing and reconnecting");
                             let _ = api.refresh_devices();
-                            let current_present = current_path.as_ref().is_some_and(|p| {
-                                api.device_list()
-                                    .any(|d| d.path().to_string_lossy() == p.as_str())
-                            });
-                            if !current_present {
-                                for transition in state.synthesize_releases(&cfg) {
-                                    let _ = emitter.emit(&transition);
-                                }
+                            if !device_path_present(&api, &current_path) {
+                                release_all(&mut state, &cfg, &mut emitter);
                                 std::thread::sleep(Duration::from_millis(500));
                                 break;
                             }
@@ -174,9 +166,7 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
                 }
                 Err(e) => {
                     eprintln!("device disconnected ({e}); reconnecting in 500ms");
-                    for transition in state.synthesize_releases(&cfg) {
-                        let _ = emitter.emit(&transition);
-                    }
+                    release_all(&mut state, &cfg, &mut emitter);
                     std::thread::sleep(Duration::from_millis(500));
                     break;
                 }

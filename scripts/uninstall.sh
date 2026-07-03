@@ -1,30 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GREEN='\033[0;32m'; YELLOW='\033[0;33m'; RED='\033[0;31m'; BOLD='\033[1m'; DIM='\033[90m'; RESET='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib.sh" ]]; then
+  source "$SCRIPT_DIR/lib.sh"
+else
+  source <(curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts/lib.sh)
+fi
 
-BIN_NAME="chimera-mapper"
-SERVICE_LABEL="com.sketu.chimera-mapper"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
 SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
 USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
-LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
-LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
-
-status() { echo -e "${GREEN}✓${RESET} $1"; }
-step()  { echo -e "\n${BOLD}$1${RESET}"; }
-info()  { echo -e "${DIM}  $1${RESET}"; }
-warn()  { echo -e "${YELLOW}!${RESET} $1"; }
-error() { echo -e "${RED}✗${RESET} $1" >&2; }
-
-detect_os() {
-  case "$(uname -s)" in
-    Darwin) echo "macos" ;;
-    Linux)  echo "linux" ;;
-    *)      error "Unsupported OS"; exit 1 ;;
-  esac
-}
 
 main() {
   local purge=false keep_binary=false
@@ -49,7 +36,7 @@ main() {
     launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" 2>/dev/null || true
     launchctl unload "$plist" 2>/dev/null || true
     rm -f "$plist"
-    rm -f "${HOME}/Library/Logs/${SERVICE_LABEL}.log" "${HOME}/Library/Logs/${SERVICE_LABEL}.err.log"
+    rm -f "${HOME}/Library/Logs/${BIN_NAME}.log" "${HOME}/Library/Logs/${BIN_NAME}.err.log"
   else
     sudo systemctl stop         "$SERVICE_LABEL" 2>/dev/null || true
     sudo systemctl disable      "$SERVICE_LABEL" 2>/dev/null || true
@@ -60,7 +47,7 @@ main() {
 
     [[ -f "$SYSTEM_SERVICE" ]] && sudo rm -f "$SYSTEM_SERVICE" && sudo systemctl daemon-reload
     [[ -f "$USER_SERVICE" ]] && rm -f "$USER_SERVICE" && systemctl --user daemon-reload
-    [[ -f "$LINUX_MODULES_LOAD" ]] && sudo rm -f "$LINUX_MODULES_LOAD"
+    [[ -f "$LINUX_MODULES_LOAD" ]] && { sudo rm -f "$LINUX_MODULES_LOAD" || true; }
     [[ -f "$LINUX_UDEV_RULES" ]] && sudo rm -f "$LINUX_UDEV_RULES" && sudo udevadm control --reload-rules 2>/dev/null || true
   fi
   status "Auto-start disabled"
