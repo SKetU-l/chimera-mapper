@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# When run via `curl | bash`, BASH_SOURCE[0] is empty/unset; guard with `:-` so `set -u`
-# doesn't kill the script before the curl fallback can run.
-if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-else
-  SCRIPT_DIR=""
-fi
-if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lib.sh" ]]; then
-  source "$SCRIPT_DIR/lib.sh"
-else
-  source <(curl -fsSL https://raw.githubusercontent.com/SKetU-l/chimera-mapper/main/scripts/lib.sh)
-fi
-
+BIN_NAME="chimera-mapper"
+SERVICE_LABEL="com.sketu.chimera-mapper"
+LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
+LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
 SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
 USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
+
+G='\033[0;32m' Y='\033[0;33m' R='\033[0;31m' B='\033[1m' D='\033[90m' N='\033[0m'
+status() { echo -e "${G}✓${N} $1"; }
+step()   { echo -e "\n${B}$1${N}"; }
+info()   { echo -e "${D}  $1${N}"; }
+warn()   { echo -e "${Y}!${N} $1"; }
+error()  { echo -e "${R}✗${N} $1" >&2; }
+
+detect_os() { case "$(uname -s)" in Darwin) echo macos;; Linux) echo linux;; *) error "Unsupported OS"; exit 1;; esac; }
 
 main() {
   local purge=false keep_binary=false
