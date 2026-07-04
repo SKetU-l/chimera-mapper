@@ -151,7 +151,6 @@ install_macos_service() {
 install_linux_service() {
   local bin="$1" system_service="/etc/systemd/system/${SERVICE_LABEL}.service"
   local user_service="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
-  local user_config_home="${HOME}/.config"
 
   ensure_linux_input_runtime
 
@@ -176,14 +175,14 @@ install_linux_service() {
 
 	[Service]
 	Type=simple
-	Environment=XDG_CONFIG_HOME=$user_config_home
-	ExecStartPre=/bin/sh -c 'modprobe uinput 2>/dev/null || true'
-	ExecStartPre=/bin/sh -c 'udevadm settle --timeout=10 2>/dev/null || true'
+	User=${USER}
+	# Setup commands need root; the + prefix runs them with full privileges.
+	ExecStartPre=+/bin/sh -c 'modprobe uinput 2>/dev/null || true'
+	ExecStartPre=+/bin/sh -c 'udevadm settle --timeout=10 2>/dev/null || true'
 	ExecStartPre=/bin/sh -c 'test -e /dev/uinput'
 	ExecStart=$bin run
 	Restart=always
 	RestartSec=2
-	User=root
 	StandardOutput=journal
 	StandardError=journal
 

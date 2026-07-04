@@ -117,6 +117,7 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
         let current_path = resolved.path.clone();
         let mut api = api;
         let mut silent_since: Option<std::time::Instant> = None;
+        let mut silent_logged = false;
         const SILENT_RECONNECT_AFTER: Duration = Duration::from_secs(5);
 
         loop {
@@ -146,24 +147,31 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
             const POLL_TIMEOUT_MS: i32 = 20;
             match device.read_timeout(&mut buf, POLL_TIMEOUT_MS) {
                 Ok(0) => {
-                    if let Some(start) = silent_since {
-                        if start.elapsed() > SILENT_RECONNECT_AFTER {
-                            eprintln!("device went silent; refreshing and reconnecting");
+                    match silent_since {
+                        Some(start) if start.elapsed() > SILENT_RECONNECT_AFTER => {
                             let _ = api.refresh_devices();
                             if !device_path_present(&api, &current_path) {
+                                eprintln!("device no longer present; reconnecting");
                                 release_all(&mut state, &cfg, &mut emitter);
                                 std::thread::sleep(Duration::from_millis(500));
                                 break;
                             }
-                            silent_since = None;
+                            if !silent_logged {
+                                eprintln!(
+                                    "device idle (no reports); still connected, keeping watch"
+                                );
+                                silent_logged = true;
+                            }
+                            silent_since = Some(std::time::Instant::now());
                         }
-                    } else {
-                        silent_since = Some(std::time::Instant::now());
+                        None => silent_since = Some(std::time::Instant::now()),
+                        _ => {}
                     }
                     continue;
                 }
                 Ok(size) => {
                     silent_since = None;
+                    silent_logged = false;
                     for transition in state.update(&cfg, &buf[..size]) {
                         emitter.emit(&transition)?;
                     }

@@ -451,13 +451,19 @@ fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
 }
 
 pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
-    // Try path first, but if stale fall through to VID+PID matching
     if let Some(path) = &args.path {
         if let Some(device) = api
             .device_list()
             .find(|d| d.path().to_string_lossy() == path.as_str())
         {
-            return Ok(device.open_device(api)?);
+            let identity_ok = args.vid.is_none() || matches_filters(device, args);
+            if identity_ok {
+                return Ok(device.open_device(api)?);
+            }
+            eprintln!(
+                "saved path {} no longer matches the expected device identity (vid/pid/usage); re-searching by filters",
+                path
+            );
         }
     }
 
