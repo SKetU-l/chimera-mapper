@@ -7,6 +7,20 @@ use std::time::{Duration, Instant};
 use crate::action::Action;
 use crate::config::{AppResult, MappingConfig, ResolvedMapping, SavedProfile, load_config};
 
+pub const VID_KREO: u16 = 0x248a;
+pub const PID_WIRED: u16 = 0x5b49;
+pub const PID_DONGLE: u16 = 0x5b4a;
+pub const PID_BLUETOOTH: u16 = 0x8266;
+
+pub fn wired_present(api: &HidApi) -> bool {
+    api.device_list()
+        .any(|d| d.vendor_id() == VID_KREO && d.product_id() == PID_WIRED)
+}
+
+pub fn is_wireless(vid: Option<u16>, pid: Option<u16>) -> bool {
+    vid == Some(VID_KREO) && matches!(pid, Some(PID_DONGLE) | Some(PID_BLUETOOTH))
+}
+
 #[derive(Args, Clone)]
 pub struct RunArgs {
     #[arg(long)]
@@ -261,9 +275,12 @@ fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
     if device.path().to_string_lossy().contains("event") {
         score += 25;
     }
-    if device.product_id() == 0x5b49 {
-        score += 50;
-    }
+    score += match (device.vendor_id(), device.product_id()) {
+        (VID_KREO, PID_WIRED) => 50,
+        (VID_KREO, PID_DONGLE) => 40,
+        (VID_KREO, PID_BLUETOOTH) => 30,
+        _ => 0,
+    };
     if score == 0 { None } else { Some(score) }
 }
 
@@ -389,15 +406,13 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
         return Ok(args);
     }
 
-    let has_wired = api
-        .device_list()
-        .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
+    let has_wired = wired_present(api);
 
     if let Ok(config) = load_config() {
         if let Some(profile) = config.profile {
             let saved_args = apply_saved_profile(&args, &profile);
 
-            let is_saved_wireless = profile.vid == 0x248a && profile.pid == 0x5b4a;
+            let is_saved_wireless = is_wireless(Some(profile.vid), Some(profile.pid));
             if !(has_wired && is_saved_wireless) {
                 if open_device(api, &saved_args).is_ok() {
                     return Ok(saved_args);

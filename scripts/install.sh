@@ -111,6 +111,7 @@ ensure_linux_input_runtime() {
 	KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
 	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b49", MODE="0660", GROUP="input"
 	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b4a", MODE="0660", GROUP="input"
+	KERNEL=="hidraw*", KERNELS=="0005:248A:*", MODE="0660", GROUP="input"
 	RULES
 
   sudo usermod -aG input "${USER}"
@@ -121,7 +122,7 @@ ensure_linux_input_runtime() {
     sudo setfacl -m "u:${USER}:rw" /dev/uinput 2>/dev/null || true
     for dev in /dev/hidraw*; do
       [[ -e "$dev" ]] || continue
-      if udevadm info -q property -n "$dev" 2>/dev/null | grep -Eq '^(ID_VENDOR_ID|HID_ID)=.*248a'; then
+      if udevadm info -q path -n "$dev" 2>/dev/null | grep -qiE '/[0-9a-f]{4}:248a:'; then
         sudo setfacl -m "u:${USER}:rw" "$dev" 2>/dev/null || true
       fi
     done

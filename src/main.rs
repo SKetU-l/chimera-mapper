@@ -124,11 +124,8 @@ fn run_mapper(args: RunArgs) -> AppResult<()> {
             if last_refresh.elapsed() > Duration::from_secs(2) {
                 last_refresh = std::time::Instant::now();
                 let _ = api.refresh_devices();
-                let has_wired = api
-                    .device_list()
-                    .any(|d| d.vendor_id() == 0x248a && d.product_id() == 0x5b49);
-                let is_wireless_active =
-                    resolved.vid == Some(0x248a) && resolved.pid == Some(0x5b4a);
+                let has_wired = hid::wired_present(&api);
+                let is_wireless_active = hid::is_wireless(resolved.vid, resolved.pid);
 
                 if is_wireless_active && has_wired {
                     eprintln!("wired device detected; switching over");
