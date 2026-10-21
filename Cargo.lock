@@ -100,6 +100,7 @@ dependencies = [
  "core-graphics",
  "dirs",
  "evdev",
+ "foreign-types",
  "hidapi",
  "serde",
  "serde_json",

@@ -256,6 +256,10 @@ fn candidate_haystack(device: &DeviceInfo) -> String {
 
 fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
     let h = candidate_haystack(device);
+    if !is_chimera_candidate(&h, device.vendor_id(), device.product_id()) {
+        return None;
+    }
+
     let mut score = 0;
     if h.contains("chimera") {
         score += 10_000;
@@ -282,6 +286,14 @@ fn autodetect_score(device: &DeviceInfo) -> Option<i32> {
         _ => 0,
     };
     if score == 0 { None } else { Some(score) }
+}
+
+fn is_chimera_candidate(haystack: &str, vid: u16, pid: u16) -> bool {
+    supported_chimera_id(vid, pid) || haystack.contains("chimera")
+}
+
+fn supported_chimera_id(vid: u16, pid: u16) -> bool {
+    vid == VID_KREO && matches!(pid, PID_WIRED | PID_DONGLE | PID_BLUETOOTH)
 }
 
 fn read_report_snapshot(
@@ -410,28 +422,25 @@ pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
 
     if let Ok(config) = load_config() {
         if let Some(profile) = config.profile {
-            let saved_args = apply_saved_profile(&args, &profile);
+            if supported_chimera_id(profile.vid, profile.pid) {
+                let mut saved_args = apply_saved_profile(&args, &profile);
 
-            let is_saved_wireless = is_wireless(Some(profile.vid), Some(profile.pid));
-            if !(has_wired && is_saved_wireless) {
-                if open_device(api, &saved_args).is_ok() {
-                    return Ok(saved_args);
+                let is_saved_wireless = is_wireless(Some(profile.vid), Some(profile.pid));
+                if !(has_wired && is_saved_wireless) {
+                    if let Ok(device) = select_device(api, &saved_args) {
+                        saved_args.path = Some(device.path().to_string_lossy().into_owned());
+                        return Ok(saved_args);
+                    }
                 }
+            } else {
+                eprintln!("ignoring saved profile for a non-Chimera HID device");
             }
         }
     }
-    // Fallback to autodetection (previously this called detect_and_save, which both
-    // auto-detected and persisted a profile). The persistence behavior is handled
-    // elsewhere (e.g. when a profile is explicitly chosen).
     autodetect_args(api, &args)
 }
 
-fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
-    if let Some(path) = &args.path {
-        if device.path().to_string_lossy() != path.as_str() {
-            return false;
-        }
-    }
+fn matches_identity(device: &DeviceInfo, args: &RunArgs) -> bool {
     if let Some(vid) = args.vid {
         if device.vendor_id() != vid {
             return false;
@@ -465,15 +474,15 @@ fn matches_filters(device: &DeviceInfo, args: &RunArgs) -> bool {
     true
 }
 
-pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
+fn select_device(api: &HidApi, args: &RunArgs) -> AppResult<DeviceInfo> {
     if let Some(path) = &args.path {
         if let Some(device) = api
             .device_list()
             .find(|d| d.path().to_string_lossy() == path.as_str())
         {
-            let identity_ok = args.vid.is_none() || matches_filters(device, args);
+            let identity_ok = args.vid.is_none() || matches_identity(device, args);
             if identity_ok {
-                return Ok(device.open_device(api)?);
+                return Ok(device.clone());
             }
             eprintln!(
                 "saved path {} no longer matches the expected device identity (vid/pid/usage); re-searching by filters",
@@ -490,12 +499,12 @@ pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
 
     let matches: Vec<_> = api
         .device_list()
-        .filter(|d| matches_filters(d, args))
+        .filter(|d| matches_identity(d, args))
         .cloned()
         .collect();
     match matches.as_slice() {
         [] => Err("no HID device matched the supplied filters".into()),
-        [device] => Ok(device.open_device(api)?),
+        [device] => Ok(device.clone()),
         many => {
             eprintln!(
                 "multiple devices matched; add --serial, --usage-page, --usage, --interface-number, or --path"
@@ -505,5 +514,31 @@ pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
             }
             Err("device selection was ambiguous".into())
         }
+    }
+}
+
+pub fn open_device(api: &HidApi, args: &RunArgs) -> AppResult<HidDevice> {
+    Ok(select_device(api, args)?.open_device(api)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_pointer_is_not_a_chimera_candidate() {
+        assert!(!is_chimera_candidate(
+            "devsrvsid:1 apple internal keyboard / trackpad apple",
+            0,
+            0,
+        ));
+    }
+
+    #[test]
+    fn recognizes_supported_chimera_ids() {
+        assert!(supported_chimera_id(VID_KREO, PID_WIRED));
+        assert!(supported_chimera_id(VID_KREO, PID_DONGLE));
+        assert!(supported_chimera_id(VID_KREO, PID_BLUETOOTH));
+        assert!(!supported_chimera_id(0, 0));
     }
 }

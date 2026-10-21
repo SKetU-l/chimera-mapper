@@ -3,6 +3,8 @@ set -euo pipefail
 
 BIN_NAME="chimera-mapper"
 SERVICE_LABEL="com.sketu.chimera-mapper"
+MACOS_BUNDLE_ID="com.sketu.chimera-mapper"
+MACOS_APP_NAME="Chimera Mapper.app"
 REPO_OWNER="SKetU-l"
 REPO_NAME="chimera-mapper"
 REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
@@ -132,14 +134,41 @@ ensure_linux_input_runtime() {
 }
 
 install_macos_service() {
-  local bin="$1" plist="${HOME}/Library/LaunchAgents/${SERVICE_LABEL}.plist"
+  local bin="$1"
+  local app="${HOME}/Applications/${MACOS_APP_NAME}"
+  local app_bin="${app}/Contents/MacOS/${BIN_NAME}"
+  local plist="${HOME}/Library/LaunchAgents/${SERVICE_LABEL}.plist"
+  local requirement="=designated => identifier \"${MACOS_BUNDLE_ID}\""
+
+  launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" 2>/dev/null || true
+
+  mkdir -p "${app}/Contents/MacOS"
+  cp "$bin" "$app_bin"
+  chmod +x "$app_bin"
+  cat > "${app}/Contents/Info.plist" <<-PLIST
+	<?xml version="1.0" encoding="UTF-8"?>
+	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+	<plist version="1.0"><dict>
+	  <key>CFBundleExecutable</key><string>${BIN_NAME}</string>
+	  <key>CFBundleIdentifier</key><string>${MACOS_BUNDLE_ID}</string>
+	  <key>CFBundleName</key><string>Chimera Mapper</string>
+	  <key>CFBundlePackageType</key><string>APPL</string>
+	  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+	  <key>LSUIElement</key><true/>
+	</dict></plist>
+	PLIST
+  codesign --force --sign - --identifier "$MACOS_BUNDLE_ID" \
+    --requirements "$requirement" "$app"
+  status "App installed → $app"
+
   mkdir -p "$(dirname "$plist")"
   cat > "$plist" <<-PLIST
 	<?xml version="1.0" encoding="UTF-8"?>
 	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 	<plist version="1.0"><dict>
 	  <key>Label</key><string>$SERVICE_LABEL</string>
-	  <key>ProgramArguments</key><array><string>$bin</string><string>run</string></array>
+	  <key>ProgramArguments</key><array><string>$app_bin</string><string>run</string></array>
+	  <key>LimitLoadToSessionType</key><string>Aqua</string>
 	  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 	  <key>StandardOutPath</key><string>$HOME/Library/Logs/chimera-mapper.log</string>
 	  <key>StandardErrorPath</key><string>$HOME/Library/Logs/chimera-mapper.err.log</string>
@@ -147,6 +176,7 @@ install_macos_service() {
 	PLIST
   launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
   status "Auto-start enabled"
+  warn "On first install, approve Chimera Mapper in both Accessibility and Input Monitoring."
 }
 
 install_linux_service() {

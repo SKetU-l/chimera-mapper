@@ -13,6 +13,23 @@ The installer will:
 - Set up auto-start on system boot
 - Configure the app to run in the background
 
+### macOS permissions
+
+On first install, allow **Chimera Mapper** in both:
+
+- **System Settings → Privacy & Security → Accessibility** (to post mouse events)
+- **System Settings → Privacy & Security → Input Monitoring** (to read the mouse HID reports)
+
+The background service runs a signed app wrapper (`~/Applications/Chimera Mapper.app`) rather than the bare Cargo binary, so macOS keeps these permissions across upgrades. If you previously granted the raw `chimera-mapper` executable, remove that entry and grant the **Chimera Mapper** app instead.
+
+To watch the native events in the foreground:
+
+```bash
+launchctl bootout "gui/$(id -u)/com.sketu.chimera-mapper"
+CHIMERA_MAPPER_LOG_EVENTS=1 ~/Applications/Chimera\ Mapper.app/Contents/MacOS/chimera-mapper run
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.sketu.chimera-mapper.plist   # restore auto-start
+```
+
 ---
 
 ## Uninstall
@@ -116,7 +133,7 @@ Current development/testing device: **Kreo Chimera V1**
 Other brands/models are **not tested yet**, so compatibility is **not confirmed**.
 
 > [!NOTE]
-> Currently, the Hackintosh system that was used to test this on macOS has been removed. Consequently, the macOS version is quite untested.
+> The side-button mapper was verified on Apple silicon (macOS 27.0) with the 2.4G dongle (`0x248a:0x5b4a`) by a contributor.
 
 ---
 

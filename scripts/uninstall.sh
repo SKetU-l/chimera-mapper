@@ -6,6 +6,7 @@ SERVICE_LABEL="com.sketu.chimera-mapper"
 LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
 LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
+MACOS_APP="${HOME}/Applications/Chimera Mapper.app"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
 SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
 USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
@@ -67,6 +68,10 @@ main() {
     fi
     if [[ -f "$USER_BIN" ]]; then
       rm -f "$USER_BIN" && status "User binary removed"
+      removed=true
+    fi
+    if [[ "$os" == "macos" ]] && [[ -d "$MACOS_APP" ]]; then
+      rm -rf "$MACOS_APP" && status "Application bundle removed"
       removed=true
     fi
     [[ "$removed" == "false" ]] && warn "Binary not found (already removed?)"

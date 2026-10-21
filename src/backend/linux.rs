@@ -148,6 +148,8 @@ variant_map! {
         Right     => KeyCode::KEY_RIGHT,
         Up        => KeyCode::KEY_UP,
         Down      => KeyCode::KEY_DOWN,
+        LeftBracket  => KeyCode::KEY_LEFTBRACE,
+        RightBracket => KeyCode::KEY_RIGHTBRACE,
     }
 }
 

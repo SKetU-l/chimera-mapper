@@ -71,6 +71,8 @@ define_str_enum! {
         Right     => "right" | "arrowright",
         Up        => "up" | "arrowup",
         Down      => "down" | "arrowdown",
+        LeftBracket  => "leftbracket" | "[",
+        RightBracket => "rightbracket" | "]",
     }
 }
 
