@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::action::Action;
+use crate::protocol::MacroMode;
 
 pub type AppResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MappingConfig {
     pub button_byte: usize,
     pub side_mask: u8,
@@ -54,7 +56,7 @@ impl MappingConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedProfile {
     pub path: String,
     pub vid: u16,
@@ -66,9 +68,37 @@ pub struct SavedProfile {
     pub mapping: MappingConfig,
 }
 
+/// Mirror of what was last written to the mouse's flash. The firmware has no
+/// read-back for the button table or macros, so this is the source of truth.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct OnboardState {
+    #[serde(default)]
+    pub buttons: BTreeMap<String, String>,
+    #[serde(default)]
+    pub macros: BTreeMap<u8, MacroConfig>,
+    /// The 2.4G dongle can't read the DPI table back from the mouse.
+    #[serde(default)]
+    pub dpi: Option<[u32; 6]>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MacroConfig {
+    pub script: String,
+    #[serde(default)]
+    pub mode: MacroMode,
+    #[serde(default = "default_repeat")]
+    pub repeat: u16,
+}
+
+fn default_repeat() -> u16 {
+    1
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     pub profile: Option<SavedProfile>,
+    #[serde(default)]
+    pub onboard: OnboardState,
 }
 
 pub fn config_path() -> AppResult<PathBuf> {
@@ -94,9 +124,17 @@ pub fn load_config() -> AppResult<AppConfig> {
     Ok(serde_json::from_str(&raw)?)
 }
 
+/// Writes atomically (temp file + rename) so the daemon and the CLI never see
+/// a half-written file. The button/macro cache can't be re-read from the
+/// mouse, so a torn write would lose it for good.
 pub fn save_config(config: &AppConfig) -> AppResult<()> {
     let path = config_path()?;
     ensure_parent_dir(&path)?;
-    fs::write(path, serde_json::to_string_pretty(config)?)?;
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    fs::write(&tmp, serde_json::to_string_pretty(config)?)?;
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }

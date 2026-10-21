@@ -21,6 +21,13 @@ pub fn is_wireless(vid: Option<u16>, pid: Option<u16>) -> bool {
     vid == Some(VID_KREO) && matches!(pid, Some(PID_DONGLE) | Some(PID_BLUETOOTH))
 }
 
+/// Report ID of the mouse's button/motion report. The same hidraw node also
+/// carries consumer, system and vendor reports, which must not be parsed as
+/// buttons (a volume-up usage of 0xE9 would read as "back" pressed).
+pub fn mouse_report_id(pid: Option<u16>) -> u8 {
+    if pid == Some(PID_BLUETOOTH) { 3 } else { 1 }
+}
+
 #[derive(Args, Clone)]
 pub struct RunArgs {
     #[arg(long)]
@@ -45,10 +52,12 @@ pub struct RunArgs {
     pub side_mask: u8,
     #[arg(long, value_parser = parse_u8, default_value = "0x08")]
     pub extra_mask: u8,
-    #[arg(long, default_value = "forward")]
-    pub side_action: String,
-    #[arg(long, default_value = "back")]
-    pub extra_action: String,
+    /// Action for the side (forward) button; defaults to the saved profile, then "forward"
+    #[arg(long)]
+    pub side_action: Option<String>,
+    /// Action for the extra (back) button; defaults to the saved profile, then "back"
+    #[arg(long)]
+    pub extra_action: Option<String>,
     #[arg(long, default_value_t = 250)]
     pub timeout_ms: i32,
     #[arg(long, default_value = "chimera-mapper")]
@@ -70,13 +79,17 @@ pub struct Transition {
 }
 
 impl MapperState {
-    pub fn update(&mut self, cfg: &ResolvedMapping, report: &[u8]) -> Vec<Transition> {
-        if report.len() <= cfg.button_byte {
+    /// Runs for every motion report, so the common no-change path must not allocate.
+    pub fn update(&mut self, cfg: &ResolvedMapping, report_id: u8, report: &[u8]) -> Vec<Transition> {
+        if report.first() != Some(&report_id) || report.len() <= cfg.button_byte {
             return Vec::new();
         }
         let byte = report[cfg.button_byte];
         let forward = (byte & cfg.side_mask) != 0;
         let back = (byte & cfg.extra_mask) != 0;
+        if forward == self.prev_forward && back == self.prev_back {
+            return Vec::new();
+        }
         let mut out = Vec::with_capacity(2);
         if forward != self.prev_forward {
             out.push(Transition {
@@ -202,8 +215,8 @@ pub fn mapping_from_args(args: &RunArgs) -> MappingConfig {
         button_byte: args.button_byte,
         side_mask: args.side_mask,
         extra_mask: args.extra_mask,
-        side_action: args.side_action.clone(),
-        extra_action: args.extra_action.clone(),
+        side_action: args.side_action.clone().unwrap_or_else(|| "forward".into()),
+        extra_action: args.extra_action.clone().unwrap_or_else(|| "back".into()),
     }
 }
 
@@ -232,8 +245,13 @@ pub fn apply_saved_profile(args: &RunArgs, profile: &SavedProfile) -> RunArgs {
     resolved.button_byte = profile.mapping.button_byte;
     resolved.side_mask = profile.mapping.side_mask;
     resolved.extra_mask = profile.mapping.extra_mask;
-    resolved.side_action = profile.mapping.side_action.clone();
-    resolved.extra_action = profile.mapping.extra_action.clone();
+    // Flags given on the command line win over the saved profile.
+    if resolved.side_action.is_none() {
+        resolved.side_action = Some(profile.mapping.side_action.clone());
+    }
+    if resolved.extra_action.is_none() {
+        resolved.extra_action = Some(profile.mapping.extra_action.clone());
+    }
     resolved
 }
 
@@ -415,7 +433,14 @@ pub fn autodetect_args(api: &HidApi, args: &RunArgs) -> AppResult<RunArgs> {
 
 pub fn resolve_run_args(api: &HidApi, args: RunArgs) -> AppResult<RunArgs> {
     if has_explicit_device_selector(&args) {
-        return Ok(args);
+        // Fill in the concrete path and identity so reconnect checks have
+        // something to compare against.
+        let device = select_device(api, &args)?;
+        let mut resolved = args;
+        resolved.path = Some(device.path().to_string_lossy().into_owned());
+        resolved.vid = Some(device.vendor_id());
+        resolved.pid = Some(device.product_id());
+        return Ok(resolved);
     }
 
     let has_wired = wired_present(api);

@@ -8,8 +8,11 @@ MACOS_APP_NAME="Chimera Mapper.app"
 REPO_OWNER="SKetU-l"
 REPO_NAME="chimera-mapper"
 REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+TARGET_USER="${USER:-$(id -un)}"
 LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
 LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
+# uaccess must be tagged before systemd's 73-seat-late.rules, hence the separate low-numbered file.
+LINUX_UACCESS_RULES="/etc/udev/rules.d/70-${BIN_NAME}.rules"
 
 G='\033[0;32m' Y='\033[0;33m' R='\033[0;31m' B='\033[1m' D='\033[90m' N='\033[0m'
 status() { echo -e "${G}✓${N} $1"; }
@@ -34,6 +37,24 @@ ensure_git() {
       fi ;;
   esac
   status "git installed"
+}
+
+# hidapi needs libudev headers and both hidapi and the bundled libusb need a C compiler.
+ensure_build_deps() {
+  [[ "$(detect_os)" == "linux" ]] || return 0
+  if command -v cc &>/dev/null && command -v pkg-config &>/dev/null && pkg-config --exists libudev 2>/dev/null; then
+    return
+  fi
+  step "Installing build dependencies"
+  if command -v apt-get &>/dev/null; then sudo apt-get install -y build-essential pkg-config libudev-dev
+  elif command -v dnf &>/dev/null;   then sudo dnf install -y gcc make pkgconf-pkg-config systemd-devel
+  elif command -v pacman &>/dev/null; then sudo pacman -S --needed --noconfirm base-devel pkgconf systemd-libs
+  elif command -v zypper &>/dev/null; then sudo zypper install -y gcc make pkg-config libudev-devel
+  else
+    error "Install a C compiler, pkg-config and the libudev development headers, then rerun"
+    return 1
+  fi
+  status "Build dependencies installed"
 }
 
 ensure_rust() {
@@ -79,15 +100,18 @@ build_from_source() {
   local src="$tmp/target/release/${BIN_NAME}"
   [[ -f "$src" ]] || { error "Build failed: binary not found" >&2; return 1; }
 
+  # This function runs in a command substitution where `set -e` doesn't apply,
+  # so every step checks its own result. Installing to a new file and renaming
+  # it over the old one also works while the service is running the old binary.
+  local dest="${install_dir}/${BIN_NAME}" sudo_cmd=""
   if [[ ! -w "$(dirname "$install_dir")" ]] || [[ ! -w "$install_dir" && -d "$install_dir" ]]; then
-    sudo mkdir -p "$install_dir"
-    sudo cp "$src" "${install_dir}/${BIN_NAME}" && sudo chmod +x "${install_dir}/${BIN_NAME}"
-  else
-    mkdir -p "$install_dir"
-    cp "$src" "${install_dir}/${BIN_NAME}" && chmod +x "${install_dir}/${BIN_NAME}"
+    sudo_cmd="sudo"
   fi
+  $sudo_cmd mkdir -p "$install_dir" >&2 || return 1
+  $sudo_cmd install -m 0755 "$src" "${dest}.new" >&2 || { error "Could not install to $dest" >&2; return 1; }
+  $sudo_cmd mv -f "${dest}.new" "$dest" >&2 || { error "Could not install to $dest" >&2; return 1; }
 
-  echo "${install_dir}/${BIN_NAME}"
+  echo "$dest"
 }
 
 ensure_linux_input_runtime() {
@@ -114,18 +138,32 @@ ensure_linux_input_runtime() {
 	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b49", MODE="0660", GROUP="input"
 	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b4a", MODE="0660", GROUP="input"
 	KERNEL=="hidraw*", KERNELS=="0005:248A:*", MODE="0660", GROUP="input"
+	SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="248a", ATTR{idProduct}=="5b49", MODE="0660", GROUP="input"
+	SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="248a", ATTR{idProduct}=="5b4a", MODE="0660", GROUP="input"
 	RULES
 
-  sudo usermod -aG input "${USER}"
+  # Lets the logged-in user configure the mouse right away, without re-login for the input group.
+  # The USB device node is needed because button/macro writes go over the control pipe.
+  sudo tee "$LINUX_UACCESS_RULES" >/dev/null <<-RULES
+	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b49", TAG+="uaccess"
+	KERNEL=="hidraw*", ATTRS{idVendor}=="248a", ATTRS{idProduct}=="5b4a", TAG+="uaccess"
+	KERNEL=="hidraw*", KERNELS=="0005:248A:*", TAG+="uaccess"
+	SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="248a", ATTR{idProduct}=="5b49", TAG+="uaccess"
+	SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="248a", ATTR{idProduct}=="5b4a", TAG+="uaccess"
+	RULES
+
+  sudo usermod -aG input "$TARGET_USER"
   sudo udevadm control --reload-rules 2>/dev/null || true
-  sudo udevadm trigger 2>/dev/null || true
+  # Re-apply the rules to devices that are already plugged in.
+  sudo udevadm trigger --action=add --subsystem-match=hidraw --subsystem-match=usb --subsystem-match=misc 2>/dev/null || true
+  sudo udevadm settle --timeout=10 2>/dev/null || true
 
   if command -v setfacl &>/dev/null; then
-    sudo setfacl -m "u:${USER}:rw" /dev/uinput 2>/dev/null || true
+    sudo setfacl -m "u:${TARGET_USER}:rw" /dev/uinput 2>/dev/null || true
     for dev in /dev/hidraw*; do
       [[ -e "$dev" ]] || continue
       if udevadm info -q path -n "$dev" 2>/dev/null | grep -qiE '/[0-9a-f]{4}:248a:'; then
-        sudo setfacl -m "u:${USER}:rw" "$dev" 2>/dev/null || true
+        sudo setfacl -m "u:${TARGET_USER}:rw" "$dev" 2>/dev/null || true
       fi
     done
   fi
@@ -142,9 +180,8 @@ install_macos_service() {
 
   launchctl bootout "gui/$(id -u)/${SERVICE_LABEL}" 2>/dev/null || true
 
-  mkdir -p "${app}/Contents/MacOS"
-  cp "$bin" "$app_bin"
-  chmod +x "$app_bin"
+  mkdir -p "${app}/Contents/MacOS" || return 1
+  cp "$bin" "$app_bin" && chmod +x "$app_bin" || { error "Could not install $app_bin"; return 1; }
   cat > "${app}/Contents/Info.plist" <<-PLIST
 	<?xml version="1.0" encoding="UTF-8"?>
 	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -153,12 +190,12 @@ install_macos_service() {
 	  <key>CFBundleIdentifier</key><string>${MACOS_BUNDLE_ID}</string>
 	  <key>CFBundleName</key><string>Chimera Mapper</string>
 	  <key>CFBundlePackageType</key><string>APPL</string>
-	  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+	  <key>CFBundleShortVersionString</key><string>0.2.0</string>
 	  <key>LSUIElement</key><true/>
 	</dict></plist>
 	PLIST
   codesign --force --sign - --identifier "$MACOS_BUNDLE_ID" \
-    --requirements "$requirement" "$app"
+    --requirements "$requirement" "$app" || { error "Could not sign $app"; return 1; }
   status "App installed → $app"
 
   mkdir -p "$(dirname "$plist")"
@@ -174,8 +211,11 @@ install_macos_service() {
 	  <key>StandardErrorPath</key><string>$HOME/Library/Logs/chimera-mapper.err.log</string>
 	</dict></plist>
 	PLIST
-  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
-  status "Auto-start enabled"
+  if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null; then
+    status "Auto-start enabled"
+  else
+    warn "Could not start the LaunchAgent; try: launchctl bootstrap gui/$(id -u) $plist"
+  fi
   warn "On first install, approve Chimera Mapper in both Accessibility and Input Monitoring."
 }
 
@@ -206,7 +246,7 @@ install_linux_service() {
 
 	[Service]
 	Type=simple
-	User=${USER}
+	User=${TARGET_USER}
 	# Setup commands need root; the + prefix runs them with full privileges.
 	ExecStartPre=+/bin/sh -c 'modprobe uinput 2>/dev/null || true'
 	ExecStartPre=+/bin/sh -c 'udevadm settle --timeout=10 2>/dev/null || true'
@@ -228,7 +268,12 @@ install_linux_service() {
 }
 
 main() {
-  local os=$(detect_os)
+  if [[ $EUID -eq 0 ]]; then
+    error "Run this as your normal user, not with sudo; it asks for sudo when it needs it."
+    exit 1
+  fi
+  local os
+  os=$(detect_os)
   local install_dir="${HOME}/.local/bin"
   [[ "$os" == "linux" ]] && install_dir="/usr/local/bin"
 
@@ -250,6 +295,7 @@ main() {
   info "Install location: $install_dir"
 
   ensure_git
+  ensure_build_deps || exit 1
   ensure_rust
 
   bin=$(build_from_source "$install_dir") || { error "Installation failed"; exit 1; }
@@ -257,7 +303,11 @@ main() {
 
   if [[ "$skip_service" != "true" ]]; then
     step "Configuring auto-start"
-    [[ "$os" == "macos" ]] && install_macos_service "$bin" || install_linux_service "$bin"
+    if [[ "$os" == "macos" ]]; then
+      install_macos_service "$bin" || { error "Auto-start setup failed"; exit 1; }
+    else
+      install_linux_service "$bin" || { error "Auto-start setup failed"; exit 1; }
+    fi
   fi
 
   sleep 2
