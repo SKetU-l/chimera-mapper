@@ -1,0 +1,19 @@
+[package]
+name = "chimera-mapper-gui"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.92"
+homepage = "https://github.com/SKetU-l/chimera-mapper"
+repository = "https://github.com/SKetU-l/chimera-mapper"
+description = "Settings app for the Kreo Chimera V1 mouse"
+
+[dependencies]
+chimera-mapper = { path = ".." }
+# Software renderer: no GPU context, which keeps memory low for a small window.
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"

@@ -81,7 +81,7 @@ pub struct OnboardState {
     pub dpi: Option<[u32; 6]>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MacroConfig {
     pub script: String,
     #[serde(default)]

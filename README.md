@@ -230,16 +230,6 @@ Other brands/models are **not tested yet**, so compatibility is **not confirmed*
 
 ---
 
-## Roadmap (after stable base version)
-
-- [x] Custom key mapping (allow users to set custom shortcuts or options instead of just Forward/Back)
-- [ ] Graphical User Interface (GUI)
-- [x] On-device configuration: DPI, polling rate, lighting, button remapping, macros, profiles
-- [x] 2.4G dongle configuration and battery level
-- [x] Bluetooth: battery level (the mouse has no settings channel over BT; configure via cable/dongle and the settings carry over)
-
----
-
 ## License
 
 Copyright (c) 2026 SKetU

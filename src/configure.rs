@@ -63,7 +63,7 @@ pub enum ProfileCommand {
 }
 
 /// A full snapshot of the mouse's on-board configuration.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeviceProfile {
     pub polling_rate: u32,
     pub dpi: [u32; DPI_STAGES],
@@ -458,83 +458,266 @@ pub fn profile(cmd: ProfileCommand, dry_run: bool) -> AppResult<()> {
         ProfileCommand::Save { file } => {
             let dev = open()?;
             let config = load_config()?;
-            let rapid = dev.query(protocol::CMD_RAPID_FIRE)?;
-            let polling = dev.query(protocol::CMD_POLLING)?[0];
-            let bindings = cached_bindings(&config)?;
-            let profile = DeviceProfile {
-                polling_rate: PollingRate::from_code(polling)
-                    .ok_or(format!("unknown polling code {polling}"))?
-                    .hz(),
-                dpi: read_dpi(&dev, &config)?,
-                led: {
-                    // Keep unknown codes loadable as plain numbers.
-                    let mode = LedMode(dev.query(protocol::CMD_LED)?[0]);
-                    mode.name().map_or_else(|| mode.0.to_string(), str::to_owned)
-                },
-                active_stage: dev.query(protocol::CMD_DPI_STAGE)?[0] as usize + 1,
-                rapid_fire_ms: u16::from_le_bytes([rapid[0], rapid[1]]) as u32 * 10,
-                buttons: PhysicalButton::ALL
-                    .iter()
-                    .map(|b| (b.name().to_string(), bindings[b.slot()].to_string()))
-                    .collect(),
-                macros: config.onboard.macros.clone(),
-            };
+            let dpi = read_dpi(&dev, &config)?;
+            let profile = read_profile(&dev, &config, dpi)?;
             fs::write(&file, serde_json::to_string_pretty(&profile)?)?;
             println!("saved profile to {}", file.display());
         }
         ProfileCommand::Load { file } => {
             let profile: DeviceProfile = serde_json::from_str(&fs::read_to_string(&file)?)?;
-            let rate: PollingRate = profile.polling_rate.to_string().parse()?;
-            let dpi = protocol::encode_dpi(&profile.dpi)?;
-            let led: LedMode = profile.led.parse()?;
-            let rapid = protocol::encode_rapid_fire(profile.rapid_fire_ms)?;
-            let stage = check_stage(profile.active_stage)?;
-            let mut bindings = PhysicalButton::ALL.map(PhysicalButton::default_binding);
-            for (name, action) in &profile.buttons {
-                let button: PhysicalButton = name.parse()?;
-                bindings[button.slot()] = action.parse()?;
-            }
-            let macros = profile
-                .macros
-                .iter()
-                .map(|(slot, m)| {
-                    macro_packets(*slot, m)
-                        .map(|packets| (*slot, packets))
-                        .map_err(|e| format!("macro {slot}: {e}"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            for binding in &bindings {
-                if let Binding::Macro(slot) = binding {
-                    if !profile.macros.contains_key(slot) {
-                        return Err(format!("a button is bound to macro {slot}, which the profile doesn't define").into());
-                    }
-                }
-            }
-            if !bindings.contains(&Binding::Mouse(MouseButton::Left)) {
-                return Err("the profile leaves no button acting as left click".into());
-            }
-
-            // Same order as the vendor tool: macros, buttons, LED, stage, DPI, rate, rapid fire.
-            apply(dry_run, |dev| {
-                for (slot, packets) in &macros {
-                    dev.write_macro(*slot, packets)?;
-                }
-                dev.write_buttons(&bindings)?;
-                dev.command(protocol::CMD_LED, &[led.0])?;
-                dev.command(protocol::CMD_DPI_STAGE, &[stage, stage])?;
-                dev.command(protocol::CMD_DPI, &dpi)?;
-                dev.command(protocol::CMD_POLLING, &[rate.code()])?;
-                dev.command(protocol::CMD_RAPID_FIRE, &rapid)
-            })?;
-            if !dry_run {
-                let mut config = load_config()?;
-                store_bindings(&mut config, &bindings);
-                config.onboard.macros = profile.macros;
-                config.onboard.dpi = Some(profile.dpi);
-                save_config(&config)?;
-            }
+            apply_profile(None, &profile, dry_run)?;
             println!("applied profile {}", file.display());
         }
     }
     Ok(())
+}
+
+/// Reads every setting the mouse reports, plus the button and macro tables
+/// chimera-mapper last wrote (the firmware can't report those back).
+fn read_profile(
+    dev: &Chimera,
+    config: &AppConfig,
+    dpi: [u32; DPI_STAGES],
+) -> AppResult<DeviceProfile> {
+    let rapid = dev.query(protocol::CMD_RAPID_FIRE)?;
+    let polling = dev.query(protocol::CMD_POLLING)?[0];
+    let bindings = cached_bindings(config)?;
+    Ok(DeviceProfile {
+        polling_rate: PollingRate::from_code(polling)
+            .ok_or(format!("unknown polling code {polling}"))?
+            .hz(),
+        dpi,
+        led: {
+            // Keep unknown codes loadable as plain numbers.
+            let mode = LedMode(dev.query(protocol::CMD_LED)?[0]);
+            mode.name().map_or_else(|| mode.0.to_string(), str::to_owned)
+        },
+        active_stage: dev.query(protocol::CMD_DPI_STAGE)?[0] as usize + 1,
+        rapid_fire_ms: u16::from_le_bytes([rapid[0], rapid[1]]) as u32 * 10,
+        buttons: PhysicalButton::ALL
+            .iter()
+            .map(|b| (b.name().to_string(), bindings[b.slot()].to_string()))
+            .collect(),
+        macros: config.onboard.macros.clone(),
+    })
+}
+
+/// Shown for the DPI table over 2.4G until chimera-mapper has written one.
+pub const DPI_PLACEHOLDER: [u32; DPI_STAGES] = [800, 1600, 2400, 3200, 4800, 6400];
+
+/// Everything a settings screen needs, read in one go.
+pub struct Snapshot {
+    pub connection: &'static str,
+    pub battery: Option<protocol::Battery>,
+    /// `None` over Bluetooth, which has no settings channel.
+    pub settings: Option<DeviceProfile>,
+    /// False over 2.4G until a DPI table has been written through
+    /// chimera-mapper; `settings.dpi` then holds `DPI_PLACEHOLDER`.
+    pub dpi_known: bool,
+}
+
+/// Connection type and battery level only; cheap enough to poll.
+pub fn status() -> AppResult<(&'static str, Option<protocol::Battery>)> {
+    let dev = open()?;
+    Ok((dev.connection(), battery(&dev)))
+}
+
+pub fn snapshot() -> AppResult<Snapshot> {
+    let dev = open()?;
+    let battery = battery(&dev);
+    if dev.is_bluetooth() {
+        return Ok(Snapshot {
+            connection: dev.connection(),
+            battery,
+            settings: None,
+            dpi_known: false,
+        });
+    }
+    let config = load_config()?;
+    let (dpi, dpi_known) = match read_dpi(&dev, &config) {
+        Ok(dpi) => (dpi, true),
+        Err(_) => (DPI_PLACEHOLDER, false),
+    };
+    Ok(Snapshot {
+        connection: dev.connection(),
+        battery,
+        settings: Some(read_profile(&dev, &config, dpi)?),
+        dpi_known,
+    })
+}
+
+/// Validates a profile and turns it into what goes on the wire.
+struct Prepared {
+    rate: PollingRate,
+    dpi: [u8; DPI_STAGES],
+    led: LedMode,
+    rapid: [u8; 2],
+    stage: u8,
+    bindings: [Binding; protocol::BUTTON_COUNT],
+}
+
+fn prepare(profile: &DeviceProfile) -> AppResult<Prepared> {
+    let mut bindings = PhysicalButton::ALL.map(PhysicalButton::default_binding);
+    for (name, action) in &profile.buttons {
+        let button: PhysicalButton = name.parse()?;
+        bindings[button.slot()] = action
+            .parse()
+            .map_err(|e| format!("{} button: {e}", button.name()))?;
+    }
+    for binding in &bindings {
+        if let Binding::Macro(slot) = binding {
+            if !profile.macros.contains_key(slot) {
+                return Err(format!("a button is bound to macro {slot}, which is empty").into());
+            }
+        }
+    }
+    if !bindings.contains(&Binding::Mouse(MouseButton::Left)) {
+        return Err("at least one button must stay left click".into());
+    }
+    Ok(Prepared {
+        rate: profile.polling_rate.to_string().parse()?,
+        dpi: protocol::encode_dpi(&profile.dpi)?,
+        led: profile.led.parse()?,
+        rapid: protocol::encode_rapid_fire(profile.rapid_fire_ms)?,
+        stage: check_stage(profile.active_stage)?,
+        bindings,
+    })
+}
+
+/// Writes `new` to the mouse in a single save. With `old` (what the mouse
+/// holds now), only the settings that differ are sent, which matters over
+/// 2.4G where each macro takes seconds. Returns false if nothing changed.
+pub fn apply_profile(
+    old: Option<&DeviceProfile>,
+    new: &DeviceProfile,
+    dry_run: bool,
+) -> AppResult<bool> {
+    let next = prepare(new)?;
+    // If the current state doesn't validate (e.g. an unknown LED code),
+    // rewrite everything rather than refuse.
+    let prev = old.and_then(|o| prepare(o).ok());
+    let changed = |f: &dyn Fn(&Prepared) -> bool| prev.as_ref().is_none_or(|p| !f(p));
+
+    let mut macros = Vec::new();
+    let slots = new
+        .macros
+        .keys()
+        .chain(old.map(|o| o.macros.keys()).into_iter().flatten());
+    for &slot in slots.collect::<std::collections::BTreeSet<_>>() {
+        let before = old.and_then(|o| o.macros.get(&slot));
+        match new.macros.get(&slot) {
+            Some(m) if Some(m) != before => macros.push((
+                slot,
+                macro_packets(slot, m).map_err(|e| format!("macro {slot}: {e}"))?,
+            )),
+            None if before.is_some() => {
+                macros.push((slot, protocol::encode_macro(slot, MacroMode::Once, 1, &[])?))
+            }
+            _ => {}
+        }
+    }
+    let buttons = !macros.is_empty() || changed(&|p| p.bindings == next.bindings);
+    let led = changed(&|p| p.led == next.led);
+    let stage = changed(&|p| p.stage == next.stage);
+    let dpi = changed(&|p| p.dpi == next.dpi);
+    let rate = changed(&|p| p.rate == next.rate);
+    let rapid = changed(&|p| p.rapid == next.rapid);
+    if !(buttons || led || stage || dpi || rate || rapid) {
+        return Ok(false);
+    }
+
+    // Same order as the vendor tool: macros, buttons, LED, stage, DPI, rate, rapid fire.
+    apply(dry_run, |dev| {
+        for (slot, packets) in &macros {
+            dev.write_macro(*slot, packets)?;
+        }
+        if buttons {
+            dev.write_buttons(&next.bindings)?;
+        }
+        if led {
+            dev.command(protocol::CMD_LED, &[next.led.0])?;
+        }
+        if stage {
+            dev.command(protocol::CMD_DPI_STAGE, &[next.stage, next.stage])?;
+        }
+        if dpi {
+            dev.command(protocol::CMD_DPI, &next.dpi)?;
+        }
+        if rate {
+            dev.command(protocol::CMD_POLLING, &[next.rate.code()])?;
+        }
+        if rapid {
+            dev.command(protocol::CMD_RAPID_FIRE, &next.rapid)?;
+        }
+        Ok(())
+    })?;
+    if !dry_run {
+        let mut config = load_config()?;
+        store_bindings(&mut config, &next.bindings);
+        config.onboard.macros = new.macros.clone();
+        if dpi {
+            config.onboard.dpi = Some(new.dpi);
+        }
+        save_config(&config)?;
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample() -> DeviceProfile {
+        DeviceProfile {
+            polling_rate: 1000,
+            dpi: [800, 1600, 2400, 3200, 4800, 10000],
+            led: "lightshow".into(),
+            active_stage: 2,
+            rapid_fire_ms: 50,
+            buttons: [("back", "alt+left"), ("forward", "macro:0")]
+                .iter()
+                .map(|(b, a)| (b.to_string(), a.to_string()))
+                .collect(),
+            macros: [(
+                0,
+                MacroConfig {
+                    script: "h, i".into(),
+                    mode: MacroMode::Once,
+                    repeat: 1,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn unchanged_profile_writes_nothing() {
+        let p = sample();
+        assert!(!apply_profile(Some(&p), &p, true).unwrap());
+    }
+
+    #[test]
+    fn changes_are_written() {
+        let old = sample();
+        let mut new = old.clone();
+        new.led = "off".into();
+        assert!(apply_profile(Some(&old), &new, true).unwrap());
+    }
+
+    #[test]
+    fn rejects_binding_to_missing_macro() {
+        let old = sample();
+        let mut new = old.clone();
+        new.macros.clear();
+        assert!(apply_profile(Some(&old), &new, true).is_err());
+    }
+
+    #[test]
+    fn rejects_losing_left_click() {
+        let old = sample();
+        let mut new = old.clone();
+        new.buttons.insert("left".into(), "disabled".into());
+        assert!(apply_profile(Some(&old), &new, true).is_err());
+    }
 }

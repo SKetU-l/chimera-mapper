@@ -1,0 +1,197 @@
+import { Theme } from "theme.slint";
+
+/// Small spaced-out uppercase heading.
+export component Caption inherits Text {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.6px;
+    color: Theme.dim;
+}
+
+export component Card inherits Rectangle {
+    background: Theme.panel;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.line;
+}
+
+/// A rounded, clickable label: segmented options, presets, actions.
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    in property <bool> enabled: true;
+    in property <bool> primary;
+    in property <length> font-size: 13px;
+    callback clicked();
+
+    min-height: 34px;
+    min-width: label.preferred-width + 24px;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: root.primary || root.active ? Theme.accent : touch.has-hover && root.enabled ? Theme.faint : Theme.line;
+    background: root.primary ? (touch.pressed ? Theme.accent.darker(0.15) : Theme.accent)
+        : root.active ? Theme.accent.with-alpha(0.14)
+        : touch.has-hover && root.enabled ? Theme.raised : transparent;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background, border-color { duration: 120ms; }
+
+    label := Text {
+        text: root.text;
+        font-size: root.font-size;
+        font-weight: root.active || root.primary ? 700 : 500;
+        color: root.primary ? Theme.accent-ink : root.active ? Theme.accent : Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        width: parent.width - 16px;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+/// One-of-n choice drawn as joined pills.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <int> current;
+    callback changed(int);
+
+    height: 38px;
+    border-radius: self.height / 2;
+    background: Theme.bg;
+    border-width: 1px;
+    border-color: Theme.line;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for option[i] in root.options: Rectangle {
+            border-radius: self.height / 2;
+            background: i == root.current ? Theme.accent : touch.has-hover ? Theme.raised : transparent;
+            animate background { duration: 140ms; }
+            Text {
+                text: option;
+                font-size: 13px;
+                font-weight: i == root.current ? 700 : 500;
+                color: i == root.current ? Theme.accent-ink : Theme.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.changed(i);
+                }
+            }
+        }
+    }
+}
+
+/// Battery level drawn as a battery, with the percentage beside it.
+export component BatteryIcon inherits HorizontalLayout {
+    in property <int> percent;
+    in property <bool> known;
+    in property <bool> charging;
+    property <color> tint: !root.known ? Theme.faint : root.charging ? Theme.accent : root.percent <= 15 ? Theme.bad : root.percent <= 30 ? Theme.warn : Theme.text;
+
+    spacing: 8px;
+    alignment: end;
+
+    Text {
+        text: !root.known ? "–" : root.charging ? "\{root.percent}% · charging" : "\{root.percent}%";
+        font-size: 13px;
+        font-weight: 600;
+        color: root.known ? Theme.text : Theme.faint;
+        vertical-alignment: center;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            spacing: 1px;
+            // Body.
+            Rectangle {
+                width: 30px;
+                height: 15px;
+                border-radius: 4px;
+                border-width: 1.5px;
+                border-color: root.known ? Theme.dim : Theme.faint;
+                Rectangle {
+                    x: 3px;
+                    y: 3px;
+                    height: parent.height - 6px;
+                    width: (parent.width - 6px) * Math.clamp(root.percent / 100, 0, 1) * (root.known ? 1 : 0);
+                    border-radius: 1.5px;
+                    background: root.tint;
+                }
+            }
+
+            // Terminal nub.
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 2.5px;
+                    height: 6px;
+                    border-radius: 1px;
+                    background: root.known ? Theme.dim : Theme.faint;
+                }
+            }
+        }
+    }
+}
+
+/// How the firmware's lighting effects look, for the previews. `k` is a
+/// segment along the strips out of `n`, and `t` is seconds.
+export global LedFx {
+    public pure function color(mode: int, k: int, n: int, t: float) -> color {
+        // Rainbow: the spectrum spread along the strip, flowing quickly.
+        if mode == 0 {
+            return Colors.hsv(Math.mod(k * 360 / n + t * 180, 360), 0.85, 1);
+        }
+        // Neon: one colour that fades out, changes, and fades back in.
+        if mode == 1 {
+            return Colors.hsv(
+                Math.mod(Math.floor(t / 3) * 67, 360),
+                0.9,
+                Math.clamp(Math.min(Math.mod(t, 3), 3 - Math.mod(t, 3)) / 0.7, 0, 1));
+        }
+        // Flash: the strip fills from the start to the far end, empties back
+        // to the start, then does it again in the next colour.
+        if mode == 3 {
+            return Colors.hsv(
+                Math.mod(Math.floor(t / 2) * 90, 360),
+                0.9,
+                Math.clamp(n * (1 - Math.abs(1 - Math.mod(t, 2))) - k, 0, 1));
+        }
+        // Show: the whole strip one colour, slowly changing.
+        if mode == 4 {
+            return Colors.hsv(Math.mod(t * 30, 360), 0.85, 1);
+        }
+        return #101114;
+    }
+}
+
+/// An animated, segmented preview of a lighting effect.
+export component LedPreview inherits Rectangle {
+    in property <int> mode;
+    in property <bool> lit: true;
+    // Seconds; the app advances it only while previews should play, so an
+    // idle window doesn't redraw.
+    in property <float> t;
+    in property <int> segments: 6;
+
+    clip: true;
+    background: #101114;
+
+    HorizontalLayout {
+        for k in root.segments: Rectangle {
+            background: root.lit ? LedFx.color(root.mode, k, root.segments, root.t) : #101114;
+        }
+    }
+}

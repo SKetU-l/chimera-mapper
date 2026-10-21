@@ -1,0 +1,601 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ButtonRow, Group, MacroRow, Preset, Step } from "types.slint";
+import { BatteryIcon, Caption, Card, LedPreview, Pill, Segmented } from "widgets.slint";
+import { MouseView } from "mouse.slint";
+import { DpiEqualizer } from "dpi.slint";
+import { BindingSheet, MacroSheet } from "sheets.slint";
+
+export { ButtonRow, Group, MacroRow, Preset, Step }
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    in property <string> hint;
+    spacing: 12px;
+    HorizontalLayout {
+        Caption {
+            text: root.title;
+        }
+
+        Text {
+            text: root.hint;
+            font-size: 11px;
+            color: Theme.faint;
+            horizontal-alignment: right;
+            overflow: elide;
+        }
+    }
+
+    @children
+}
+
+component LightingPicker inherits Rectangle {
+    in property <int> current;
+    in property <float> clock;
+    out property <bool> hovered: touch.has-hover;
+    callback changed(int);
+    // Breathing (2) and ambilight (5) are left out: on the mouse the first
+    // looks like rainbow and the second doesn't light up.
+    property <[{name: string, mode: int}]> effects: [
+        { name: "Rainbow", mode: 0 },
+        { name: "Neon", mode: 1 },
+        { name: "Flash", mode: 3 },
+        { name: "Show", mode: 4 },
+    ];
+    property <length> gap: 8px;
+    property <length> cell: (self.width + self.gap) / self.effects.length;
+    // The swatch under the pointer, or -1.
+    property <int> under: touch.has-hover ? Math.floor(touch.mouse-x / self.cell) : -1;
+
+    height: 64px;
+
+    for effect[i] in root.effects: Rectangle {
+        x: i * root.cell;
+        width: root.cell - root.gap;
+        Rectangle {
+            y: 0;
+            height: 40px;
+            border-radius: 10px;
+            border-width: effect.mode == root.current ? 2px : 1px;
+            border-color: effect.mode == root.current ? Theme.accent : i == root.under ? Theme.faint : Theme.line;
+            animate border-color { duration: 120ms; }
+            LedPreview {
+                x: 4px;
+                y: 4px;
+                width: parent.width - 8px;
+                height: parent.height - 8px;
+                border-radius: 6px;
+                mode: effect.mode;
+                t: root.clock;
+            }
+        }
+
+        Text {
+            y: 48px;
+            height: 16px;
+            text: effect.name;
+            font-size: 11px;
+            font-weight: effect.mode == root.current ? 700 : 500;
+            color: effect.mode == root.current ? Theme.accent : Theme.dim;
+            horizontal-alignment: center;
+        }
+    }
+
+    // One touch area for all swatches, so hovering anywhere over them keeps
+    // the previews playing.
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if root.under >= 0 && root.under < root.effects.length {
+                root.changed(root.effects[root.under].mode);
+            }
+        }
+    }
+}
+
+component MacroList inherits VerticalLayout {
+    in property <[MacroRow]> macros;
+    in property <int> used;
+    callback open(int);
+    callback create();
+    spacing: 6px;
+
+    for m[i] in root.macros: Rectangle {
+        visible: m.script != "";
+        height: self.visible ? 40px : 0;
+        border-radius: Theme.small-radius;
+        background: touch.has-hover ? Theme.raised : Theme.bg;
+        border-width: 1px;
+        border-color: m.error != "" ? Theme.bad : Theme.line;
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 12px;
+            spacing: 10px;
+            Rectangle {
+                width: 30px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 6px;
+                background: Theme.accent.with-alpha(0.14);
+                Text {
+                    text: "M" + m.slot;
+                    font-size: 11px;
+                    font-weight: 800;
+                    color: Theme.accent;
+                }
+            }
+
+            Text {
+                text: m.script;
+                font-size: 12px;
+                color: Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            Text {
+                text: m.mode == 0 ? (m.repeat > 1 ? "×" + m.repeat : "once") : m.mode == 1 ? "held" : "toggle";
+                font-size: 11px;
+                color: Theme.dim;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+        }
+
+        touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                root.open(i);
+            }
+        }
+    }
+
+    if root.used == 0: Text {
+        text: "Macros replay keystrokes from the mouse itself. Bind one to any button.";
+        font-size: 12px;
+        color: Theme.faint;
+        wrap: word-wrap;
+    }
+
+    if root.used < root.macros.length: Pill {
+        text: "+  New macro";
+        clicked => {
+            root.create();
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Chimera Mapper";
+    background: Theme.bg;
+    preferred-width: 1080px;
+    preferred-height: 760px;
+    min-width: 600px;
+    min-height: 520px;
+    default-font-size: 13px;
+
+    // "" while no mouse is connected.
+    in property <string> connection;
+    in property <int> battery: -1;
+    in property <bool> charging;
+    // False over Bluetooth, which has no settings channel.
+    in property <bool> configurable;
+    in property <bool> busy;
+    in property <bool> dirty;
+    in property <int> changes;
+    in property <string> status;
+    in property <bool> status-error;
+    in property <bool> dpi-known: true;
+
+    in property <[int]> dpi;
+    in-out property <int> active-stage;
+    in-out property <int> rate-index;
+    in-out property <int> led-index;
+    in property <[Preset]> presets;
+    in property <[Group]> groups;
+    in property <[ButtonRow]> buttons;
+    in property <[MacroRow]> macros;
+    in property <int> macros-used;
+
+    in-out property <int> button-sheet: -1;
+    in-out property <int> macro-sheet: -1;
+    in-out property <bool> recording;
+    // Advanced by the app while the lighting previews should play.
+    in property <float> led-clock;
+    // Pointer over something that shows a lighting preview.
+    out property <bool> led-hover: mouse.hovered || lighting.hovered;
+
+    callback refresh();
+    callback apply();
+    callback revert();
+    callback edited();
+    callback dpi-changed(int, float);
+    callback button-preset(int, int);
+    callback button-custom(int, string);
+    callback record-shortcut(int, string, bool, bool, bool, bool) -> string;
+    callback macro-script(int, string);
+    callback macro-mode(int, int);
+    callback macro-repeat(int, int);
+    callback new-macro() -> int;
+    callback start-recording(int);
+    callback stop-recording(int);
+    callback record-key(int, string, bool);
+    // Plays the lighting previews for a moment (and while hovered).
+    callback preview();
+
+    changed led-hover => {
+        if self.led-hover {
+            root.preview();
+        }
+    }
+    changed led-index => {
+        root.preview();
+    }
+
+    property <string> connection-label: root.connection == "wired" ? "Cable" : root.connection == "2.4G dongle" ? "2.4 GHz" : root.connection == "bluetooth" ? "Bluetooth" : "Not connected";
+    property <color> connection-color: root.connection == "" ? Theme.faint : root.connection == "bluetooth" ? Theme.wireless : Theme.accent;
+
+    VerticalLayout {
+        // Header.
+        HorizontalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 18px;
+            padding-bottom: 6px;
+            spacing: 14px;
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Caption {
+                    text: "KREO";
+                    color: Theme.faint;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Text {
+                        text: "Chimera V1";
+                        font-size: 24px;
+                        font-weight: 800;
+                        color: Theme.text;
+                        vertical-alignment: center;
+                    }
+
+                    // Connection tag, centred on the title line.
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: tag.preferred-width;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: root.connection-color.with-alpha(0.12);
+                            border-width: 1px;
+                            border-color: root.connection-color.with-alpha(0.4);
+                            tag := HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 11px;
+                                spacing: 6px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 7px;
+                                        height: 7px;
+                                        border-radius: 3.5px;
+                                        background: root.connection-color;
+                                    }
+                                }
+
+                                Text {
+                                    text: root.connection-label;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    color: root.connection-color;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Pill {
+                    text: root.busy && !root.dirty ? "Reading…" : "Reload";
+                    enabled: !root.busy;
+                    clicked => {
+                        root.refresh();
+                    }
+                }
+            }
+
+            BatteryIcon {
+                horizontal-stretch: 0;
+                percent: Math.max(root.battery, 0);
+                known: root.battery >= 0;
+                charging: root.charging;
+            }
+        }
+
+        // Left: the mouse, as tall as the window allows. Right: settings.
+        body := HorizontalLayout {
+            vertical-stretch: 1;
+            padding-left: 12px;
+            spacing: 12px;
+
+            Rectangle {
+                horizontal-stretch: 1;
+                mouse := MouseView {
+                    width: parent.width;
+                    height: parent.height - 24px;
+                    buttons: root.buttons;
+                    selected: root.button-sheet;
+                    led: root.led-index;
+                    led-clock: root.led-clock;
+                    enabled: root.configurable;
+                    pick(slot) => {
+                        root.button-sheet = slot;
+                    }
+                }
+
+            }
+
+            ScrollView {
+                horizontal-stretch: 1;
+                content-width: self.visible-width;
+                content-height: controls.preferred-height;
+
+                controls := VerticalLayout {
+                    width: parent.visible-width;
+                    padding-top: 12px;
+                    padding-right: 24px;
+                    padding-bottom: 96px;
+                    spacing: 16px;
+                    alignment: start;
+
+                    Card {
+                        opacity: root.configurable ? 1 : 0.35;
+                        VerticalLayout {
+                            padding: 18px;
+                            Section {
+                                title: "SENSITIVITY";
+                                hint: root.dpi-known ? "drag or scroll · tap a number to switch" : "placeholder: the dongle can't read DPI back";
+                                DpiEqualizer {
+                                    dpi: root.dpi;
+                                    active: root.active-stage;
+                                    set-dpi(i, v) => {
+                                        if root.configurable {
+                                            root.dpi-changed(i, v);
+                                        }
+                                    }
+                                    set-active(i) => {
+                                        if root.configurable {
+                                            root.active-stage = i;
+                                            root.edited();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        opacity: root.configurable ? 1 : 0.35;
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 20px;
+                            Section {
+                                title: "POLLING RATE";
+                                hint: "Hz";
+                                Segmented {
+                                    options: ["125", "250", "500", "1000"];
+                                    current: root.rate-index;
+                                    changed(i) => {
+                                        if root.configurable {
+                                            root.rate-index = i;
+                                            root.edited();
+                                        }
+                                    }
+                                }
+                            }
+
+                            Section {
+                                title: "LIGHTING";
+                                hint: "needs the switch underneath on RGB";
+                                lighting := LightingPicker {
+                                    current: root.led-index;
+                                    clock: root.led-clock;
+                                    changed(i) => {
+                                        if root.configurable {
+                                            root.led-index = i;
+                                            root.edited();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Card {
+                        opacity: root.configurable ? 1 : 0.35;
+                        VerticalLayout {
+                            padding: 18px;
+                            Section {
+                                title: "MACROS";
+                                hint: root.macros-used + " of 8";
+                                MacroList {
+                                    macros: root.macros;
+                                    used: root.macros-used;
+                                    open(i) => {
+                                        if root.configurable {
+                                            root.macro-sheet = i;
+                                        }
+                                    }
+                                    create => {
+                                        if root.configurable {
+                                            root.macro-sheet = root.new-macro();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // No settings to show: dim the whole page under the header and explain.
+    if !root.configurable: Rectangle {
+        y: body.y;
+        height: body.height;
+        background: Theme.bg.with-alpha(0.7);
+        // Keep clicks from reaching the dimmed controls.
+        TouchArea { }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: Math.min(420px, parent.width - 40px);
+            height: notice.preferred-height;
+            border-radius: Theme.radius;
+            background: Theme.panel;
+            border-width: 1px;
+            border-color: Theme.line;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: #00000060;
+            notice := VerticalLayout {
+                padding: 24px;
+                spacing: 8px;
+                Text {
+                    text: root.connection == "" ? "Mouse not found" : "Battery only over Bluetooth";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.connection == ""
+                        ? "Plug in the cable or the 2.4 GHz dongle, or pair it over Bluetooth."
+                        : "Settings can only be changed over the cable or the 2.4 GHz dongle. They're stored on the mouse and carry over to Bluetooth.";
+                    font-size: 13px;
+                    color: Theme.dim;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Save bar: floats over the bottom while there is something to say.
+    if root.dirty || root.busy || root.status != "": Rectangle {
+        property <bool> saving: root.busy && root.dirty;
+        x: (parent.width - self.width) / 2;
+        y: parent.height - self.height - 22px;
+        width: Math.min(560px, parent.width - 40px);
+        height: 56px;
+        border-radius: 28px;
+        background: Theme.raised;
+        border-width: 1px;
+        border-color: root.status-error ? Theme.bad.with-alpha(0.6) : root.dirty ? Theme.accent.with-alpha(0.4) : Theme.line;
+        drop-shadow-blur: 30px;
+        drop-shadow-color: #000000a0;
+
+        HorizontalLayout {
+            padding-left: 22px;
+            padding-right: 10px;
+            spacing: 8px;
+            Text {
+                text: root.status != "" ? root.status
+                    : root.changes == 1 ? "1 unsaved change" : root.changes + " unsaved changes";
+                color: root.status-error ? Theme.bad : root.dirty ? Theme.text : Theme.dim;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if root.dirty: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Pill {
+                    text: "Revert";
+                    enabled: !root.busy;
+                    clicked => {
+                        root.revert();
+                    }
+                }
+            }
+
+            if root.dirty: VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Pill {
+                    primary: true;
+                    text: root.busy ? "Saving…" : "Save to mouse";
+                    enabled: !root.busy && root.configurable;
+                    clicked => {
+                        root.apply();
+                    }
+                }
+            }
+        }
+    }
+
+    if root.button-sheet >= 0: BindingSheet {
+        entry: root.buttons[root.button-sheet];
+        presets: root.presets;
+        groups: root.groups;
+        close => {
+            root.button-sheet = -1;
+        }
+        choose(p) => {
+            root.button-preset(root.button-sheet, p);
+            root.button-sheet = -1;
+        }
+        custom(text) => {
+            root.button-custom(root.button-sheet, text);
+        }
+        record(text, ctrl, alt, shift, meta) => {
+            root.record-shortcut(root.button-sheet, text, ctrl, alt, shift, meta)
+        }
+    }
+
+    if root.macro-sheet >= 0: MacroSheet {
+        entry: root.macros[root.macro-sheet];
+        recording <=> root.recording;
+        close => {
+            if root.recording {
+                root.recording = false;
+                root.stop-recording(root.macro-sheet);
+            }
+            root.macro-sheet = -1;
+        }
+        script(text) => {
+            root.macro-script(root.macro-sheet, text);
+        }
+        mode(m) => {
+            root.macro-mode(root.macro-sheet, m);
+        }
+        repeat(n) => {
+            root.macro-repeat(root.macro-sheet, n);
+        }
+        start-recording => {
+            root.start-recording(root.macro-sheet);
+        }
+        stop-recording => {
+            root.stop-recording(root.macro-sheet);
+        }
+        record-key(text, pressed) => {
+            root.record-key(root.macro-sheet, text, pressed);
+        }
+    }
+}

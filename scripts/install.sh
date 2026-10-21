@@ -2,13 +2,18 @@
 set -euo pipefail
 
 BIN_NAME="chimera-mapper"
+GUI_NAME="chimera-mapper-gui"
 SERVICE_LABEL="com.sketu.chimera-mapper"
 MACOS_BUNDLE_ID="com.sketu.chimera-mapper"
 MACOS_APP_NAME="Chimera Mapper.app"
+MACOS_GUI_APP_NAME="Chimera Mapper Settings.app"
+MACOS_GUI_BUNDLE_ID="com.sketu.chimera-mapper.settings"
+LINUX_DESKTOP_FILE="${HOME}/.local/share/applications/${BIN_NAME}.desktop"
 REPO_OWNER="SKetU-l"
 REPO_NAME="chimera-mapper"
 REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
 TARGET_USER="${USER:-$(id -un)}"
+WITH_GUI=true
 LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
 LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 # uaccess must be tagged before systemd's 73-seat-late.rules, hence the separate low-numbered file.
@@ -40,18 +45,20 @@ ensure_git() {
 }
 
 # hidapi needs libudev headers and both hidapi and the bundled libusb need a C compiler.
+# The settings app also needs fontconfig.
 ensure_build_deps() {
   [[ "$(detect_os)" == "linux" ]] || return 0
-  if command -v cc &>/dev/null && command -v pkg-config &>/dev/null && pkg-config --exists libudev 2>/dev/null; then
+  if command -v cc &>/dev/null && command -v pkg-config &>/dev/null \
+    && pkg-config --exists libudev 2>/dev/null && { ! $WITH_GUI || pkg-config --exists fontconfig 2>/dev/null; }; then
     return
   fi
   step "Installing build dependencies"
-  if command -v apt-get &>/dev/null; then sudo apt-get install -y build-essential pkg-config libudev-dev
-  elif command -v dnf &>/dev/null;   then sudo dnf install -y gcc make pkgconf-pkg-config systemd-devel
-  elif command -v pacman &>/dev/null; then sudo pacman -S --needed --noconfirm base-devel pkgconf systemd-libs
-  elif command -v zypper &>/dev/null; then sudo zypper install -y gcc make pkg-config libudev-devel
+  if command -v apt-get &>/dev/null; then sudo apt-get install -y build-essential pkg-config libudev-dev libfontconfig1-dev
+  elif command -v dnf &>/dev/null;   then sudo dnf install -y gcc make pkgconf-pkg-config systemd-devel fontconfig-devel
+  elif command -v pacman &>/dev/null; then sudo pacman -S --needed --noconfirm base-devel pkgconf systemd-libs fontconfig
+  elif command -v zypper &>/dev/null; then sudo zypper install -y gcc make pkg-config libudev-devel fontconfig-devel
   else
-    error "Install a C compiler, pkg-config and the libudev development headers, then rerun"
+    error "Install a C compiler, pkg-config and the libudev and fontconfig development headers, then rerun"
     return 1
   fi
   status "Build dependencies installed"
@@ -83,22 +90,29 @@ build_from_source() {
   info "Cloning $REPO_URL" >&2
   git clone --depth=1 "$REPO_URL" "$tmp" >&2
 
-  step "Compiling (this may take a while)" >&2
-  if command -v cargo &>/dev/null; then
-    cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
-  else
+  if ! command -v cargo &>/dev/null; then
     local env_path="${CARGO_HOME:-$HOME/.cargo}/env"
-    if [[ -f "$env_path" ]]; then
-      source "$env_path"
-      cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
-    else
-      error "Cargo not found." >&2
-      return 1
-    fi
+    [[ -f "$env_path" ]] && source "$env_path"
+    command -v cargo &>/dev/null || { error "Cargo not found." >&2; return 1; }
   fi
+
+  step "Compiling (this may take a while)" >&2
+  cargo build --release --manifest-path "$tmp/Cargo.toml" >&2
 
   local src="$tmp/target/release/${BIN_NAME}"
   [[ -f "$src" ]] || { error "Build failed: binary not found" >&2; return 1; }
+
+  # The settings app is optional: if it doesn't build (e.g. Rust older than
+  # 1.92), the mapper and CLI still get installed.
+  local gui_src=""
+  if $WITH_GUI; then
+    step "Compiling the settings app" >&2
+    if cargo build --release --manifest-path "$tmp/Cargo.toml" -p "$GUI_NAME" >&2; then
+      gui_src="$tmp/target/release/${GUI_NAME}"
+    else
+      warn "The settings app failed to build (it needs Rust 1.92+: try 'rustup update'); continuing without it" >&2
+    fi
+  fi
 
   # This function runs in a command substitution where `set -e` doesn't apply,
   # so every step checks its own result. Installing to a new file and renaming
@@ -111,7 +125,55 @@ build_from_source() {
   $sudo_cmd install -m 0755 "$src" "${dest}.new" >&2 || { error "Could not install to $dest" >&2; return 1; }
   $sudo_cmd mv -f "${dest}.new" "$dest" >&2 || { error "Could not install to $dest" >&2; return 1; }
 
+  if [[ -n "$gui_src" ]]; then
+    local gui_dest="${install_dir}/${GUI_NAME}"
+    $sudo_cmd install -m 0755 "$gui_src" "${gui_dest}.new" >&2 \
+      && $sudo_cmd mv -f "${gui_dest}.new" "$gui_dest" >&2 \
+      || { error "Could not install to $gui_dest" >&2; return 1; }
+  fi
+
   echo "$dest"
+}
+
+install_linux_launcher() {
+  local gui="$1"
+  mkdir -p "$(dirname "$LINUX_DESKTOP_FILE")" || return 1
+  cat > "$LINUX_DESKTOP_FILE" <<-DESKTOP
+	[Desktop Entry]
+	Type=Application
+	Name=Chimera Mapper
+	GenericName=Mouse Settings
+	Comment=Configure the Kreo Chimera V1 mouse
+	Exec=$gui
+	Icon=input-mouse
+	Terminal=false
+	Categories=Settings;HardwareSettings;
+	Keywords=mouse;dpi;macro;kreo;
+	DESKTOP
+  command -v update-desktop-database &>/dev/null && update-desktop-database "$(dirname "$LINUX_DESKTOP_FILE")" 2>/dev/null
+  status "Settings app added to the app menu"
+}
+
+install_macos_gui_app() {
+  local gui="$1"
+  local app="${HOME}/Applications/${MACOS_GUI_APP_NAME}"
+  local app_bin="${app}/Contents/MacOS/${GUI_NAME}"
+  mkdir -p "${app}/Contents/MacOS" || return 1
+  cp "$gui" "$app_bin" && chmod +x "$app_bin" || { error "Could not install $app_bin"; return 1; }
+  cat > "${app}/Contents/Info.plist" <<-PLIST
+	<?xml version="1.0" encoding="UTF-8"?>
+	<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+	<plist version="1.0"><dict>
+	  <key>CFBundleExecutable</key><string>${GUI_NAME}</string>
+	  <key>CFBundleIdentifier</key><string>${MACOS_GUI_BUNDLE_ID}</string>
+	  <key>CFBundleName</key><string>Chimera Mapper Settings</string>
+	  <key>CFBundlePackageType</key><string>APPL</string>
+	  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+	  <key>NSHighResolutionCapable</key><true/>
+	</dict></plist>
+	PLIST
+  codesign --force --sign - --identifier "$MACOS_GUI_BUNDLE_ID" "$app" || { error "Could not sign $app"; return 1; }
+  status "Settings app installed → $app"
 }
 
 ensure_linux_input_runtime() {
@@ -282,7 +344,8 @@ main() {
     case "$1" in
       --install-dir) install_dir="$2"; shift ;;
       --skip-service) skip_service=true ;;
-      -h|--help) echo "Usage: $0 [--install-dir PATH] [--skip-service]"; exit 0 ;;
+      --no-gui) WITH_GUI=false ;;
+      -h|--help) echo "Usage: $0 [--install-dir PATH] [--skip-service] [--no-gui]"; exit 0 ;;
       *) error "Unknown option: $1"; exit 1 ;;
     esac
     shift
@@ -300,6 +363,15 @@ main() {
 
   bin=$(build_from_source "$install_dir") || { error "Installation failed"; exit 1; }
   status "Build complete → $bin"
+
+  local gui="${install_dir}/${GUI_NAME}"
+  if $WITH_GUI && [[ -x "$gui" ]]; then
+    if [[ "$os" == "macos" ]]; then
+      install_macos_gui_app "$gui" || warn "Could not create the settings app bundle; run $gui directly"
+    else
+      install_linux_launcher "$gui" || warn "Could not add the app menu entry; run $gui directly"
+    fi
+  fi
 
   if [[ "$skip_service" != "true" ]]; then
     step "Configuring auto-start"
@@ -329,6 +401,13 @@ main() {
   fi
 
   step "All set!"
+  if $WITH_GUI && [[ -x "$gui" ]]; then
+    if [[ "$os" == "macos" ]]; then
+      info "Settings: open ~/Applications/${MACOS_GUI_APP_NAME}"
+    else
+      info "Settings: 'Chimera Mapper' in your app menu, or $gui"
+    fi
+  fi
   info "To test: $bin run"
   if [[ "$os" == "macos" ]]; then
     info "Logs:    tail -f ~/Library/Logs/chimera-mapper.log"

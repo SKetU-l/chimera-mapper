@@ -1,0 +1,36 @@
+export struct ButtonRow {
+    name: string,
+    // What the button does, ready for display.
+    binding: string,
+    preset: int,
+    custom: string,
+    error: string,
+}
+
+export struct Step {
+    label: string,
+    // 0 tap, 1 press, 2 release, 3 delay
+    kind: int,
+}
+
+export struct MacroRow {
+    slot: int,
+    script: string,
+    mode: int,
+    repeat: int,
+    error: string,
+    steps: [Step],
+}
+
+export struct Preset {
+    label: string,
+    // Index into the groups list, and position within that group.
+    group: int,
+    pos: int,
+    enabled: bool,
+}
+
+export struct Group {
+    title: string,
+    count: int,
+}

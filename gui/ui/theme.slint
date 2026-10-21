@@ -1,0 +1,20 @@
+import { Palette } from "std-widgets.slint";
+
+// Colours come from the platform style's palette, so the app follows the
+// desktop's light/dark setting like any other native window.
+export global Theme {
+    out property <color> bg: Palette.background;
+    out property <color> panel: Palette.alternate-background;
+    out property <color> raised: Palette.control-background;
+    out property <color> line: Palette.border;
+    out property <color> text: Palette.foreground;
+    out property <color> dim: Palette.foreground.with-alpha(0.62);
+    out property <color> faint: Palette.foreground.with-alpha(0.4);
+    out property <color> accent: Palette.accent-background;
+    out property <color> accent-ink: Palette.accent-foreground;
+    out property <color> warn: #e8a33a;
+    out property <color> bad: #e5484d;
+    out property <color> wireless: Palette.accent-background;
+    out property <length> radius: 12px;
+    out property <length> small-radius: 8px;
+}

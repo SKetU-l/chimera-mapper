@@ -7,6 +7,11 @@ homepage = "https://github.com/SKetU-l/chimera-mapper"
 repository = "https://github.com/SKetU-l/chimera-mapper"
 description = "Configuration tool and side-button mapper for the Kreo Chimera V1 mouse"
 
+[workspace]
+members = ["gui"]
+# Plain `cargo build` builds only the daemon/CLI; build the GUI with `-p chimera-mapper-gui`.
+default-members = ["."]
+
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
 hidapi = { version = "2.6.5", features = ["macos-shared-device"] }
@@ -21,3 +26,8 @@ rusb = { version = "0.9", features = ["vendored"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25.0"
 foreign-types = "0.5.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

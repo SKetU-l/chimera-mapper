@@ -6,8 +6,11 @@ SERVICE_LABEL="com.sketu.chimera-mapper"
 LINUX_MODULES_LOAD="/etc/modules-load.d/${BIN_NAME}.conf"
 LINUX_UDEV_RULES="/etc/udev/rules.d/99-${BIN_NAME}.rules"
 LINUX_UACCESS_RULES="/etc/udev/rules.d/70-${BIN_NAME}.rules"
+GUI_NAME="chimera-mapper-gui"
 USER_BIN="${HOME}/.local/bin/${BIN_NAME}"
 MACOS_APP="${HOME}/Applications/Chimera Mapper.app"
+MACOS_GUI_APP="${HOME}/Applications/Chimera Mapper Settings.app"
+LINUX_DESKTOP_FILE="${HOME}/.local/share/applications/${BIN_NAME}.desktop"
 SYSTEM_BIN="/usr/local/bin/${BIN_NAME}"
 SYSTEM_SERVICE="/etc/systemd/system/${SERVICE_LABEL}.service"
 USER_SERVICE="${HOME}/.config/systemd/user/${SERVICE_LABEL}.service"
@@ -73,18 +76,26 @@ main() {
   if [[ "$keep_binary" != "true" ]]; then
     step "Removing files"
     local removed=false
-    if [[ -f "$SYSTEM_BIN" ]]; then
-      sudo rm -f "$SYSTEM_BIN" && status "System binary removed"
-      removed=true
+    local dir
+    for dir in "$(dirname "$SYSTEM_BIN")" "$(dirname "$USER_BIN")"; do
+      local name
+      for name in "$BIN_NAME" "$GUI_NAME"; do
+        [[ -f "$dir/$name" ]] || continue
+        if [[ -w "$dir" ]]; then rm -f "$dir/$name"; else sudo rm -f "$dir/$name"; fi
+        status "Removed $dir/$name"
+        removed=true
+      done
+    done
+    if [[ -f "$LINUX_DESKTOP_FILE" ]]; then
+      rm -f "$LINUX_DESKTOP_FILE" && status "App menu entry removed"
     fi
-    if [[ -f "$USER_BIN" ]]; then
-      rm -f "$USER_BIN" && status "User binary removed"
-      removed=true
-    fi
-    if [[ "$os" == "macos" ]] && [[ -d "$MACOS_APP" ]]; then
-      rm -rf "$MACOS_APP" && status "Application bundle removed"
-      removed=true
-    fi
+    local app
+    for app in "$MACOS_APP" "$MACOS_GUI_APP"; do
+      if [[ "$os" == "macos" ]] && [[ -d "$app" ]]; then
+        rm -rf "$app" && status "Removed $app"
+        removed=true
+      fi
+    done
     [[ "$removed" == "false" ]] && warn "Binary not found (already removed?)"
   else
     info "Keeping application file"

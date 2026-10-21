@@ -1,0 +1,304 @@
+import { Theme } from "theme.slint";
+import { ButtonRow } from "types.slint";
+import { LedFx } from "widgets.slint";
+
+/// One physical button's binding.
+component BindingChip inherits Rectangle {
+    in property <ButtonRow> entry;
+    in property <bool> selected;
+    in property <bool> hovered;
+    in property <bool> enabled;
+    callback clicked();
+    callback hover(bool);
+
+    border-radius: Theme.small-radius;
+    background: root.selected ? Theme.accent.with-alpha(0.15) : root.hovered ? Theme.raised : Theme.panel;
+    border-width: 1px;
+    border-color: root.selected ? Theme.accent : root.entry.error != "" ? Theme.bad : root.hovered ? Theme.dim : Theme.line;
+    opacity: root.enabled ? 1 : 0.4;
+    animate background, border-color { duration: 120ms; }
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        spacing: 1px;
+        Text {
+            text: root.entry.name;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            color: Theme.dim;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.entry.binding;
+            font-size: 13px;
+            font-weight: 600;
+            color: root.selected ? Theme.accent : Theme.text;
+            overflow: elide;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+        changed has-hover => {
+            root.hover(self.has-hover);
+        }
+    }
+}
+
+/// The mouse, traced from Kreo's top-view product photo, with a chip per
+/// button. Shapes use the photo's pixel coordinates (x 175-535, y 55-660)
+/// and the whole drawing scales to the space it's given.
+export component MouseView inherits Rectangle {
+    in property <[ButtonRow]> buttons;
+    in property <int> selected: -1;
+    in property <int> led;
+    in property <float> led-clock;
+    in property <bool> enabled;
+    out property <bool> hovered: root.hover >= 0 || area-hover.has-hover;
+    callback pick(int);
+
+    // Slot order matches the firmware: left, right, middle, back, forward, DPI.
+    property <int> hover: -1;
+    // The mouse is drawn in its real colours whatever the theme.
+    property <color> shell: #1b1c20;
+    property <color> part: #2a2c33;
+    property <color> edge: #3a3d46;
+    property <color> trim: #a998f0;
+
+    property <length> chip-w: 136px;
+    property <length> chip-h: 46px;
+    property <length> gap: 28px;
+    property <length> caption-h: 30px;
+    // Screen length of one photo pixel: the mouse fills the height, beside
+    // a single column of chips on the left.
+    property <length> unit: Math.max(0.2px, Math.min((root.height - root.caption-h - 16px) / 605, (root.width - root.chip-w - root.gap) / 360));
+    property <length> ox: root.chip-w + root.gap + (root.width - root.chip-w - root.gap - 360 * root.unit) / 2;
+    property <length> oy: (root.height - root.caption-h - 605 * root.unit) / 2;
+    property <length> chip-x: root.ox - root.gap - root.chip-w;
+
+    // Chips in the order their buttons sit, front to back: next to their
+    // button where there's room, never overlapping.
+    property <length> step: root.chip-h + 10px;
+    property <length> y-wheel: root.py(150) - root.chip-h / 2;
+    property <length> y-left: Math.max(root.py(200) - root.chip-h / 2, root.y-wheel + root.step);
+    property <length> y-right: root.y-left + root.step;
+    property <length> y-dpi: Math.max(root.py(262) - root.chip-h / 2, root.y-right + root.step);
+    property <length> y-front: Math.max(root.py(291) - root.chip-h / 2, root.y-dpi + root.step);
+    property <length> y-back: Math.max(root.py(367) - root.chip-h / 2, root.y-front + root.step);
+
+    pure function px(x: float) -> length {
+        return root.ox + (x - 175) * root.unit;
+    }
+    pure function py(y: float) -> length {
+        return root.oy + (y - 55) * root.unit;
+    }
+
+    area-hover := TouchArea {
+        x: root.ox;
+        y: root.oy;
+        width: 360 * root.unit;
+        height: 605 * root.unit;
+    }
+
+    drawing := Rectangle {
+        x: root.ox;
+        y: root.oy;
+        width: 360 * root.unit;
+        height: 605 * root.unit;
+        opacity: root.enabled ? 1 : 0.5;
+
+        // RGB strips along the base of the rear sides, as segments in one
+        // run: left side front to back, then right side back to front.
+        for segment[k] in [
+            "M 190.9 462.7 L 189.1 466.5 L 188.0 470.3 L 187.1 474.2 L 186.2 478.1 L 185.5 482.1 L 184.8 486.0 L 184.2 490.0 L 183.6 493.9 L 189.7 494.2 L 189.9 490.3 L 190.2 486.4 L 190.5 482.4 L 190.8 478.5 L 191.2 474.6 L 191.5 470.7 L 192.0 466.8 L 192.4 462.9 Z",
+            "M 183.6 493.9 L 183.2 497.9 L 182.8 502.0 L 182.5 506.1 L 182.4 510.2 L 182.4 514.3 L 182.6 518.4 L 182.9 522.5 L 183.3 526.6 L 191.2 525.4 L 190.6 521.5 L 190.2 517.7 L 189.8 513.8 L 189.6 509.9 L 189.5 506.0 L 189.5 502.1 L 189.6 498.2 L 189.7 494.2 Z",
+            "M 183.3 526.6 L 183.9 530.8 L 184.7 534.8 L 185.5 538.9 L 186.5 542.9 L 187.7 546.9 L 189.0 550.9 L 190.4 554.8 L 191.9 558.6 L 199.8 555.3 L 198.3 551.7 L 196.9 548.1 L 195.7 544.4 L 194.6 540.6 L 193.5 536.9 L 192.6 533.1 L 191.8 529.2 L 191.2 525.4 Z",
+            "M 191.9 558.6 L 193.7 562.5 L 195.5 566.2 L 197.5 569.9 L 199.6 573.5 L 201.8 577.0 L 204.1 580.4 L 206.6 583.8 L 209.2 587.0 L 215.5 582.2 L 213.1 579.1 L 210.9 575.9 L 208.8 572.6 L 206.8 569.3 L 204.9 565.9 L 203.1 562.4 L 201.4 558.9 L 199.8 555.3 Z",
+            "M 209.2 587.0 L 211.8 590.2 L 214.6 593.2 L 217.5 596.2 L 220.5 599.0 L 223.6 601.8 L 226.8 604.4 L 230.0 606.9 L 233.3 609.3 L 237.2 604.5 L 234.2 602.0 L 231.3 599.4 L 228.4 596.8 L 225.7 594.0 L 223.0 591.2 L 220.4 588.3 L 217.9 585.3 L 215.5 582.2 Z",
+            "M 233.3 609.3 L 236.7 611.6 L 240.2 613.7 L 243.8 615.7 L 247.4 617.6 L 251.0 619.3 L 254.8 620.8 L 258.6 622.2 L 262.7 622.8 L 263.4 621.4 L 260.0 619.6 L 256.5 617.7 L 253.2 615.8 L 249.9 613.7 L 246.6 611.5 L 243.4 609.3 L 240.3 607.0 L 237.2 604.5 Z",
+            "M 466.7 609.3 L 463.3 611.6 L 459.8 613.7 L 456.2 615.7 L 452.6 617.6 L 449.0 619.3 L 445.2 620.8 L 441.4 622.2 L 437.3 622.8 L 436.6 621.4 L 440.0 619.6 L 443.5 617.7 L 446.8 615.8 L 450.1 613.7 L 453.4 611.5 L 456.6 609.3 L 459.7 607.0 L 462.8 604.5 Z",
+            "M 490.8 587.0 L 488.2 590.2 L 485.4 593.2 L 482.5 596.2 L 479.5 599.0 L 476.4 601.8 L 473.2 604.4 L 470.0 606.9 L 466.7 609.3 L 462.8 604.5 L 465.8 602.0 L 468.7 599.4 L 471.6 596.8 L 474.3 594.0 L 477.0 591.2 L 479.6 588.3 L 482.1 585.3 L 484.5 582.2 Z",
+            "M 508.1 558.6 L 506.3 562.5 L 504.5 566.2 L 502.5 569.9 L 500.4 573.5 L 498.2 577.0 L 495.9 580.4 L 493.4 583.8 L 490.8 587.0 L 484.5 582.2 L 486.9 579.1 L 489.1 575.9 L 491.2 572.6 L 493.2 569.3 L 495.1 565.9 L 496.9 562.4 L 498.6 558.9 L 500.2 555.3 Z",
+            "M 516.7 526.6 L 516.1 530.8 L 515.3 534.8 L 514.5 538.9 L 513.5 542.9 L 512.3 546.9 L 511.0 550.9 L 509.6 554.8 L 508.1 558.6 L 500.2 555.3 L 501.7 551.7 L 503.1 548.1 L 504.3 544.4 L 505.4 540.6 L 506.5 536.9 L 507.4 533.1 L 508.2 529.2 L 508.8 525.4 Z",
+            "M 516.4 493.9 L 516.8 497.9 L 517.2 502.0 L 517.5 506.1 L 517.6 510.2 L 517.6 514.3 L 517.4 518.4 L 517.1 522.5 L 516.7 526.6 L 508.8 525.4 L 509.4 521.5 L 509.8 517.7 L 510.2 513.8 L 510.4 509.9 L 510.5 506.0 L 510.5 502.1 L 510.4 498.2 L 510.3 494.2 Z",
+            "M 509.1 462.7 L 510.9 466.5 L 512.0 470.3 L 512.9 474.2 L 513.8 478.1 L 514.5 482.1 L 515.2 486.0 L 515.8 490.0 L 516.4 493.9 L 510.3 494.2 L 510.1 490.3 L 509.8 486.4 L 509.5 482.4 L 509.2 478.5 L 508.8 474.6 L 508.5 470.7 L 508.0 466.8 L 507.6 462.9 Z",
+        ]: Path {
+            viewbox-x: 175;
+            viewbox-y: 55;
+            viewbox-width: 360;
+            viewbox-height: 605;
+            commands: segment;
+            fill: root.enabled ? LedFx.color(root.led, k, 12, root.led-clock) : transparent;
+        }
+
+        for shape[i] in [
+            { d: "M 350 68 C 440 68 492 80 497 140 C 502 200 498 290 497 350 C 496 390 512 440 514 500 C 516 580 450 642 350 642 C 250 642 186 580 188 500 C 190 440 206 390 205 350 C 204 290 200 200 205 140 C 210 80 260 68 350 68 Z", kind: 1 },
+            { d: "M 348 70 L 348 312 C 322 313 300 318 284 328 C 264 341 236 351 206 353 C 204 290 200 200 205 140 C 210 80 262 70 348 70 Z", kind: 2 },
+            { d: "M 352 70 L 352 312 C 378 313 400 318 416 328 C 436 341 464 351 494 353 C 496 290 500 200 495 140 C 490 80 438 70 352 70 Z", kind: 3 },
+            // DPI button: a hexagon.
+            { d: "M 350 238 L 367 250 L 367 274 L 350 286 L 333 274 L 333 250 Z", kind: 4 },
+        ]: Path {
+            viewbox-x: 175;
+            viewbox-y: 55;
+            viewbox-width: 360;
+            viewbox-height: 605;
+            commands: shape.d;
+            fill: shape.kind == 1 ? root.shell
+                : shape.kind == 4 ? (5 == root.selected ? Theme.accent : 5 == root.hover ? root.trim.brighter(0.2) : root.trim)
+                : (shape.kind - 2) == root.selected ? Theme.accent.with-alpha(0.35)
+                : (shape.kind - 2) == root.hover ? #ffffff14 : #ffffff06;
+            stroke: shape.kind == 4 ? transparent
+                : shape.kind >= 2 && (shape.kind - 2) == root.selected ? Theme.accent : root.edge;
+            stroke-width: 1px;
+            animate fill { duration: 120ms; }
+        }
+
+        // Wheel.
+        Rectangle {
+            x: (331 - 175) * root.unit;
+            y: (124 - 55) * root.unit;
+            width: 38 * root.unit;
+            height: 94 * root.unit;
+            border-radius: self.width / 2;
+            background: 2 == root.selected ? Theme.accent : 2 == root.hover ? #4a4d57 : root.part;
+            border-width: 1px;
+            border-color: root.edge;
+            animate background { duration: 120ms; }
+            for r in 7: Rectangle {
+                x: parent.width * 0.25;
+                y: parent.height * (0.5 + (r - 3) * 0.1) - 1px;
+                width: parent.width * 0.5;
+                height: 2px;
+                border-radius: 1px;
+                background: #ffffff1c;
+            }
+        }
+
+        // Side buttons on the left edge: front (forward) and back.
+        for side[i] in [
+            { slot: 4, y: 246, h: 90 },
+            { slot: 3, y: 340, h: 54 },
+        ]: Rectangle {
+            x: (198 - 175) * root.unit;
+            y: (side.y - 55) * root.unit;
+            width: 13 * root.unit;
+            height: side.h * root.unit;
+            border-radius: self.width / 2;
+            background: side.slot == root.selected ? Theme.accent : side.slot == root.hover ? root.trim.brighter(0.2) : root.trim;
+            animate background { duration: 120ms; }
+        }
+
+        // Hit areas, in photo coordinates. Later ones sit on top, so the
+        // wheel and DPI button win over the button regions around them.
+        for area[i] in [
+            { slot: 0, x: 206, y: 70, w: 142, h: 270 },
+            { slot: 1, x: 352, y: 70, w: 144, h: 270 },
+            { slot: 4, x: 190, y: 244, w: 30, h: 94 },
+            { slot: 3, x: 190, y: 338, w: 30, h: 58 },
+            { slot: 2, x: 324, y: 116, w: 52, h: 108 },
+            { slot: 5, x: 326, y: 232, w: 48, h: 60 },
+        ]: TouchArea {
+            x: (area.x - 175) * root.unit;
+            y: (area.y - 55) * root.unit;
+            width: area.w * root.unit;
+            height: area.h * root.unit;
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            clicked => {
+                root.pick(area.slot);
+            }
+            changed has-hover => {
+                if self.has-hover {
+                    root.hover = area.slot;
+                } else if root.hover == area.slot {
+                    root.hover = -1;
+                }
+            }
+        }
+    }
+
+    // Leader lines on top of the drawing: chip edge, elbow, button.
+    for line[i] in [
+        { slot: 2, cy: root.y-wheel, hx: root.px(350), hy: root.py(171) },
+        { slot: 0, cy: root.y-left, hx: root.px(275), hy: root.py(215) },
+        { slot: 1, cy: root.y-right, hx: root.px(425), hy: root.py(215) },
+        { slot: 5, cy: root.y-dpi, hx: root.px(350), hy: root.py(262) },
+        { slot: 4, cy: root.y-front, hx: root.px(204), hy: root.py(291) },
+        { slot: 3, cy: root.y-back, hx: root.px(204), hy: root.py(367) },
+    ]: Rectangle {
+        property <color> tint: line.slot == root.selected ? Theme.accent : line.slot == root.hover ? Theme.text : Theme.dim;
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            property <float> y0: (line.cy + root.chip-h / 2) / 1px;
+            property <float> x0: (root.chip-x + root.chip-w) / 1px;
+            property <float> xe: self.x0 + root.gap / 2px;
+            commands: "M \{self.x0} \{self.y0} L \{self.xe} \{self.y0} L \{line.hx / 1px} \{line.hy / 1px}";
+            stroke: parent.tint;
+            stroke-width: 1.25px;
+            opacity: root.enabled ? 0.9 : 0.3;
+        }
+
+        // Dot on the button.
+        Rectangle {
+            x: line.hx - 3.5px;
+            y: line.hy - 3.5px;
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: parent.tint;
+            border-width: 1.5px;
+            border-color: root.shell;
+            opacity: root.enabled ? 1 : 0.3;
+        }
+    }
+
+    for chip[i] in [
+        { slot: 2, y: root.y-wheel },
+        { slot: 0, y: root.y-left },
+        { slot: 1, y: root.y-right },
+        { slot: 5, y: root.y-dpi },
+        { slot: 4, y: root.y-front },
+        { slot: 3, y: root.y-back },
+    ]: BindingChip {
+        x: root.chip-x;
+        y: chip.y;
+        width: root.chip-w;
+        height: root.chip-h;
+        entry: root.buttons[chip.slot];
+        selected: chip.slot == root.selected;
+        hovered: chip.slot == root.hover;
+        enabled: root.enabled;
+        clicked => {
+            root.pick(chip.slot);
+        }
+        hover(on) => {
+            if on {
+                root.hover = chip.slot;
+            } else if root.hover == chip.slot {
+                root.hover = -1;
+            }
+        }
+    }
+
+    Text {
+        y: root.height - root.caption-h;
+        height: root.caption-h;
+        width: root.width;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: root.enabled ? "Click a button to remap it" : "";
+        font-size: 12px;
+        color: Theme.faint;
+    }
+}

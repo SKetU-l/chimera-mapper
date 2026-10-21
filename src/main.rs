@@ -2,18 +2,10 @@ use clap::{Parser, Subcommand};
 use hidapi::HidApi;
 use std::time::{Duration, Instant};
 
-#[macro_use]
-mod action;
-mod backend;
-mod config;
-mod configure;
-mod device;
-mod hid;
-mod protocol;
-
-use action::{Action, MouseButton};
-use config::{AppResult, ResolvedMapping, load_config, save_config};
-use hid::{
+use chimera_mapper::action::{Action, MouseButton};
+use chimera_mapper::config::{AppResult, ResolvedMapping, load_config, save_config};
+use chimera_mapper::{backend, configure, hid};
+use chimera_mapper::hid::{
     MapperState, RunArgs, device_path_present, format_report, list_devices, mapping_from_args,
     open_device, resolve_run_args, saved_profile_from_args,
 };

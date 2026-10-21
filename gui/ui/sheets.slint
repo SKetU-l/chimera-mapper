@@ -1,0 +1,421 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { ButtonRow, Group, MacroRow, Preset } from "types.slint";
+import { Caption, Pill, Segmented } from "widgets.slint";
+
+/// Dimmed backdrop with a centred card; clicking outside closes it.
+component Sheet inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <length> card-width: 600px;
+    callback close();
+
+    background: #00000088;
+
+    TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    card := Rectangle {
+        width: Math.min(root.card-width, root.width - 32px);
+        height: Math.min(content.preferred-height, root.height - 32px);
+        background: Theme.panel;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.line;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #000000c0;
+        clip: true;
+
+        // Swallow clicks so they don't reach the backdrop.
+        TouchArea { }
+
+        content := VerticalLayout {
+            padding: 22px;
+            spacing: 16px;
+            HorizontalLayout {
+                VerticalLayout {
+                    spacing: 4px;
+                    Caption {
+                        text: root.subtitle;
+                    }
+
+                    Text {
+                        text: root.title;
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: start;
+                    Pill {
+                        width: 34px;
+                        height: 34px;
+                        text: "✕";
+                        clicked => {
+                            root.close();
+                        }
+                    }
+                }
+            }
+
+            @children
+        }
+    }
+}
+
+export component BindingSheet inherits Sheet {
+    in property <ButtonRow> entry;
+    in property <[Preset]> presets;
+    in property <[Group]> groups;
+    callback choose(int);
+    callback custom(string);
+    // Turns a key press into a binding; returns "" if the key isn't supported.
+    callback record(string, bool, bool, bool, bool) -> string;
+
+    property <int> columns: 3;
+    property <length> chip-gap: 8px;
+    property <length> chip-h: 34px;
+    property <bool> listening: recorder.has-focus;
+    property <int> custom-index: root.presets.length;
+
+    subtitle: "REMAP · " + root.entry.name;
+    title: root.entry.binding;
+
+    for group[g] in root.groups: VerticalLayout {
+        spacing: 8px;
+        Caption {
+            text: group.title;
+        }
+
+        grid := Rectangle {
+            height: Math.ceil(group.count / root.columns) * (root.chip-h + root.chip-gap) - root.chip-gap;
+            for preset[p] in root.presets: Pill {
+                visible: preset.group == g;
+                property <length> w: (grid.width - (root.columns - 1) * root.chip-gap) / root.columns;
+                x: Math.mod(preset.pos, root.columns) * (self.w + root.chip-gap);
+                y: Math.floor(preset.pos / root.columns) * (root.chip-h + root.chip-gap);
+                width: self.w;
+                height: root.chip-h;
+                text: preset.label;
+                active: p == root.entry.preset;
+                enabled: preset.enabled;
+                clicked => {
+                    root.choose(p);
+                }
+            }
+        }
+    }
+
+    VerticalLayout {
+        spacing: 8px;
+        Caption {
+            text: "KEYBOARD SHORTCUT";
+        }
+
+        Rectangle {
+            height: 52px;
+            border-radius: Theme.small-radius;
+            background: root.listening ? Theme.accent.with-alpha(0.08) : Theme.bg;
+            border-width: 1px;
+            border-color: root.listening ? Theme.accent : root.entry.preset == root.custom-index ? Theme.accent.with-alpha(0.5) : Theme.line;
+            animate border-color, background { duration: 140ms; }
+
+            recorder := FocusScope {
+                key-pressed(event) => {
+                    // Wait for a non-modifier key; the modifiers ride along.
+                    if event.text == Key.Control || event.text == Key.Shift || event.text == Key.Alt || event.text == Key.Meta {
+                        return accept;
+                    }
+                    if event.text == Key.Escape && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift {
+                        self.clear-focus();
+                        return accept;
+                    }
+                    if root.record(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.shift, event.modifiers.meta) != "" {
+                        self.clear-focus();
+                    }
+                    accept
+                }
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        recorder.focus();
+                    }
+                }
+            }
+
+            Text {
+                text: root.listening ? "Press a key combination…  (Esc to cancel)"
+                    : root.entry.preset == root.custom-index && root.entry.custom != "" ? root.entry.binding
+                    : "Click, then press the keys";
+                font-size: 14px;
+                font-weight: root.listening ? 600 : 500;
+                color: root.listening ? Theme.accent : root.entry.preset == root.custom-index ? Theme.text : Theme.dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "or type it:";
+                color: Theme.faint;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+
+            LineEdit {
+                text: root.entry.custom;
+                placeholder-text: "ctrl+shift+t";
+                edited(text) => {
+                    root.custom(text);
+                }
+            }
+        }
+
+        if root.entry.error != "": Text {
+            text: root.entry.error;
+            color: Theme.bad;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+    }
+}
+
+/// Keycap-style chips showing a macro's steps.
+component StepStrip inherits Rectangle {
+    in property <MacroRow> entry;
+    property <int> columns: 7;
+    property <length> gap: 6px;
+    property <length> chip-h: 30px;
+    property <length> chip-w: (self.width - (self.columns - 1) * self.gap) / self.columns;
+
+    height: root.entry.steps.length == 0 ? self.chip-h : Math.ceil(root.entry.steps.length / root.columns) * (self.chip-h + self.gap) - self.gap;
+
+    if root.entry.steps.length == 0: Text {
+        text: "No steps yet. Record, or type a script below.";
+        color: Theme.faint;
+        font-size: 13px;
+        vertical-alignment: center;
+    }
+
+    for step[i] in root.entry.steps: Rectangle {
+        x: Math.mod(i, root.columns) * (root.chip-w + root.gap);
+        y: Math.floor(i / root.columns) * (root.chip-h + root.gap);
+        width: root.chip-w;
+        height: root.chip-h;
+        border-radius: step.kind == 3 ? self.height / 2 : 7px;
+        background: step.kind == 3 ? transparent : step.kind == 0 ? Theme.raised : Theme.panel;
+        border-width: 1px;
+        border-color: step.kind == 3 ? Theme.faint : step.kind == 1 ? Theme.accent.with-alpha(0.6) : step.kind == 2 ? Theme.dim : Theme.line;
+        // Keycap lip.
+        drop-shadow-offset-y: step.kind == 3 ? 0 : 2px;
+        drop-shadow-color: #00000080;
+        Text {
+            text: step.label;
+            font-size: 12px;
+            font-weight: step.kind == 3 ? 500 : 700;
+            color: step.kind == 3 ? Theme.dim : Theme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+            width: parent.width - 6px;
+        }
+    }
+}
+
+/// A round button holding one symbol.
+component RoundButton inherits Pill {
+    width: 34px;
+    height: 34px;
+}
+
+export component MacroSheet inherits Sheet {
+    in property <MacroRow> entry;
+    in-out property <bool> recording;
+    callback script(string);
+    callback mode(int);
+    callback repeat(int);
+    callback start-recording();
+    callback stop-recording();
+    callback record-key(string, bool);
+
+    card-width: 600px;
+    subtitle: "MACRO · SLOT " + root.entry.slot;
+    title: root.entry.steps.length == 0 ? "Empty" : root.entry.steps.length + " steps";
+
+    // Steps, and the key capture while recording.
+    capture := FocusScope {
+        height: steps-box.height;
+        key-pressed(event) => {
+            if root.recording {
+                root.record-key(event.text, true);
+            }
+            accept
+        }
+        key-released(event) => {
+            if root.recording {
+                root.record-key(event.text, false);
+            }
+            accept
+        }
+
+        steps-box := Rectangle {
+            height: strip.height + 24px;
+            border-radius: Theme.small-radius;
+            background: Theme.bg;
+            border-width: 1px;
+            border-color: root.recording ? Theme.accent : Theme.line;
+            animate border-color { duration: 140ms; }
+            strip := StepStrip {
+                x: 12px;
+                y: 12px;
+                width: parent.width - 24px;
+                entry: root.entry;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        Pill {
+            horizontal-stretch: 0;
+            width: 150px;
+            text: root.recording ? "■  Stop" : "●  Record keys";
+            active: root.recording;
+            clicked => {
+                if root.recording {
+                    root.recording = false;
+                    root.stop-recording();
+                } else {
+                    root.recording = true;
+                    root.start-recording();
+                    capture.focus();
+                }
+            }
+        }
+
+        Text {
+            text: root.recording ? "Type the keys. Pauses are recorded too." : "Records key presses and the pauses between them.";
+            color: root.recording ? Theme.accent : Theme.faint;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    VerticalLayout {
+        spacing: 6px;
+        Caption {
+            text: "SCRIPT";
+        }
+
+        LineEdit {
+            text: root.entry.script;
+            enabled: !root.recording;
+            placeholder-text: "+ctrl, c, -ctrl, 50ms";
+            edited(text) => {
+                root.script(text);
+            }
+        }
+
+        Text {
+            text: "\"a\" taps a key · \"+ctrl\" holds · \"-ctrl\" releases · \"50ms\" waits";
+            color: Theme.faint;
+            font-size: 11px;
+        }
+    }
+
+    VerticalLayout {
+        spacing: 6px;
+        Caption {
+            text: "WHEN THE BUTTON IS PRESSED";
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+            Segmented {
+                options: ["Run once", "While held", "Toggle"];
+                current: root.entry.mode;
+                changed(m) => {
+                    root.mode(m);
+                }
+            }
+
+            // Repeat count, for "run once".
+            HorizontalLayout {
+                horizontal-stretch: 0;
+                spacing: 4px;
+                opacity: root.entry.mode == 0 ? 1 : 0.35;
+                VerticalLayout {
+                    alignment: center;
+                    RoundButton {
+                        text: "−";
+                        enabled: root.entry.mode == 0 && root.entry.repeat > 1;
+                        clicked => {
+                            root.repeat(root.entry.repeat - 1);
+                        }
+                    }
+                }
+
+                Text {
+                    width: 44px;
+                    text: "×" + root.entry.repeat;
+                    font-size: 15px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    RoundButton {
+                        text: "+";
+                        enabled: root.entry.mode == 0 && root.entry.repeat < 999;
+                        clicked => {
+                            root.repeat(root.entry.repeat + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.entry.error != "": Text {
+        text: root.entry.error;
+        color: Theme.bad;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    HorizontalLayout {
+        alignment: end;
+        spacing: 8px;
+        Pill {
+            text: "Clear";
+            enabled: root.entry.script != "" && !root.recording;
+            clicked => {
+                root.script("");
+            }
+        }
+
+        Pill {
+            text: "Done";
+            primary: true;
+            clicked => {
+                if root.recording {
+                    root.recording = false;
+                    root.stop-recording();
+                }
+                root.close();
+            }
+        }
+    }
+}

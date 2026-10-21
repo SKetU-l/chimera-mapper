@@ -1,0 +1,90 @@
+import { Theme } from "theme.slint";
+
+/// Six DPI stages as draggable bars. Drag or scroll a bar to change its
+/// value; click the number underneath to make that stage active.
+export component DpiEqualizer inherits Rectangle {
+    in property <[int]> dpi;
+    in property <int> active;
+    callback set-dpi(int, float);
+    callback set-active(int);
+
+    height: 210px;
+
+    HorizontalLayout {
+        spacing: 10px;
+        for value[i] in root.dpi: VerticalLayout {
+            spacing: 8px;
+            Text {
+                text: value;
+                font-size: 13px;
+                font-weight: i == root.active ? 800 : 500;
+                color: i == root.active ? Theme.accent : Theme.dim;
+                horizontal-alignment: center;
+            }
+
+            bar := Rectangle {
+                vertical-stretch: 1;
+                border-radius: 8px;
+                background: touch.has-hover ? Theme.raised : Theme.bg;
+                border-width: 1px;
+                border-color: Theme.line;
+                animate background { duration: 120ms; }
+
+                // Fill from the bottom.
+                Rectangle {
+                    x: 3px;
+                    width: parent.width - 6px;
+                    height: Math.max(10px, (parent.height - 6px) * value / 10000);
+                    y: parent.height - 3px - self.height;
+                    border-radius: 6px;
+                    background: i == root.active
+                        ? Theme.accent
+                        : Theme.text.with-alpha(0.2);
+                    animate height { duration: 90ms; }
+                }
+
+                touch := TouchArea {
+                    mouse-cursor: ns-resize;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            root.set-dpi(i, (1 - self.mouse-y / self.height) * 10000);
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            root.set-dpi(i, (1 - self.mouse-y / self.height) * 10000);
+                        }
+                    }
+                    scroll-event(event) => {
+                        root.set-dpi(i, value + (event.delta-y > 0 ? 100 : -100));
+                        accept
+                    }
+                }
+            }
+
+            stage := Rectangle {
+                height: 28px;
+                border-radius: 14px;
+                background: i == root.active ? Theme.accent : stage-touch.has-hover ? Theme.raised : transparent;
+                border-width: 1px;
+                border-color: i == root.active ? Theme.accent : Theme.line;
+                animate background { duration: 140ms; }
+                Text {
+                    text: i + 1;
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: i == root.active ? Theme.accent-ink : Theme.dim;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                stage-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.set-active(i);
+                    }
+                }
+            }
+        }
+    }
+}
